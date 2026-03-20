@@ -16,7 +16,18 @@ type Config struct {
 func Load() Config {
 	port := os.Getenv("SERVER_PORT")
 	if port == "" {
-		port = "8080"
+		port = "8085"
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		// Matches docker-compose published port (avoids clashing with a local Postgres on 5432).
+		databaseURL = "postgres://postgres:postgres@localhost:5433/ticketbooking?sslmode=disable"
+	}
+
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379"
 	}
 
 	ttlMinutes := 10
@@ -28,8 +39,8 @@ func Load() Config {
 
 	return Config{
 		ServerPort:     port,
-		DatabaseURL:    os.Getenv("DATABASE_URL"),
-		RedisURL:       os.Getenv("REDIS_URL"),
+		DatabaseURL:    databaseURL,
+		RedisURL:       redisURL,
 		ReservationTTL: time.Duration(ttlMinutes) * time.Minute,
 	}
 }

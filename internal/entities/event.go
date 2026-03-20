@@ -23,7 +23,7 @@ type Venue struct {
 	Name      string          `json:"name"`
 	Address   string          `json:"address"`
 	Capacity  int             `json:"capacity"`
-	SeatMap   json.RawMessage `json:"seatMap,omitempty"`
+	SeatMap   *json.RawMessage `json:"seatMap,omitempty"`
 	CreatedAt time.Time       `json:"createdAt"`
 }
 

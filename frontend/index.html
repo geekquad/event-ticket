@@ -376,7 +376,8 @@
 <div id="toast"></div>
 
 <script>
-  const API = 'http://localhost:8080';
+  // Same hostname as the page (localhost vs 127.0.0.1) so the browser origin matches the API host.
+  const API = `http://${window.location.hostname}:8085`;
   const RESERVATION_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
   // ── State ──────────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -17,15 +18,40 @@ import (
 	"ticket/internal/config"
 )
 
+// loadDotEnv loads the first .env found walking up from the working directory
+// (so `go run .` from cmd/server still finds repo-root .env).
+func loadDotEnv() {
+	dir, err := os.Getwd()
+	if err != nil {
+		slog.Warn("getwd", "error", err)
+		return
+	}
+	for {
+		p := filepath.Join(dir, ".env")
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			if err := godotenv.Load(p); err != nil {
+				slog.Warn("load .env", "path", p, "error", err)
+			} else {
+				slog.Info("loaded .env", "path", p)
+			}
+			return
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			slog.Warn("no .env file found (using defaults from env or config)")
+			return
+		}
+		dir = parent
+	}
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
 
-	if err := godotenv.Load(); err != nil {
-		slog.Warn("no .env file found", "error", err)
-	}
+	loadDotEnv()
 
 	cfg := config.Load()
 
