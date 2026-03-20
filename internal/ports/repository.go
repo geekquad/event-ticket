@@ -24,7 +24,10 @@ type TicketRepository interface {
 	GetByEventID(ctx context.Context, eventID string) ([]entities.Ticket, error)
 	GetAvailableByEventID(ctx context.Context, eventID string, limit int) ([]entities.Ticket, error)
 	GetByIDs(ctx context.Context, ids []string) ([]entities.Ticket, error)
-	BulkUpdateStatus(ctx context.Context, ticketIDs []string, status entities.TicketStatus, bookingID *string) error
+	// BulkUpdateStatus returns the number of rows actually updated.
+	// When setting BOOKED it only updates tickets that are still AVAILABLE,
+	// so the caller can detect a race (n < len(ticketIDs) means another confirm won).
+	BulkUpdateStatus(ctx context.Context, ticketIDs []string, status entities.TicketStatus, bookingID *string) (int64, error)
 }
 
 type BookingRepository interface {
@@ -32,7 +35,8 @@ type BookingRepository interface {
 	GetByID(ctx context.Context, id string) (*entities.Booking, error)
 	GetByUserID(ctx context.Context, userID string) ([]entities.Booking, error)
 	UpdateStatus(ctx context.Context, bookingID string, status entities.BookingStatus) error
-	CancelExpiredReservations(ctx context.Context, before time.Time) error
+	// CancelExpiredReservations marks RESERVED bookings whose expires_at has passed as CANCELLED.
+	CancelExpiredReservations(ctx context.Context) error
 }
 
 type AuditRepository interface {

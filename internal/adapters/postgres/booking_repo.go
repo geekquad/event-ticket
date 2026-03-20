@@ -25,10 +25,10 @@ func (r *bookingRepo) exec(ctx context.Context) executor {
 
 func (r *bookingRepo) Create(ctx context.Context, booking *entities.Booking) error {
 	_, err := r.exec(ctx).ExecContext(ctx,
-		`INSERT INTO bookings (id, user_id, event_id, total_price, status, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		`INSERT INTO bookings (id, user_id, event_id, total_price, status, expires_at, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		booking.ID, booking.UserID, booking.EventID,
-		booking.TotalPrice, booking.Status,
+		booking.TotalPrice, booking.Status, booking.ExpiresAt,
 		booking.CreatedAt, booking.UpdatedAt,
 	)
 	if err != nil {
@@ -50,13 +50,14 @@ func (r *bookingRepo) Create(ctx context.Context, booking *entities.Booking) err
 
 func (r *bookingRepo) GetByID(ctx context.Context, id string) (*entities.Booking, error) {
 	var booking entities.Booking
+	var expiresAt time.Time
 	err := r.exec(ctx).QueryRowContext(ctx,
-		`SELECT id, user_id, event_id, total_price, status, created_at, updated_at
+		`SELECT id, user_id, event_id, total_price, status, expires_at, created_at, updated_at
 		 FROM bookings WHERE id = $1 FOR UPDATE`,
 		id,
 	).Scan(
 		&booking.ID, &booking.UserID, &booking.EventID,
-		&booking.TotalPrice, &booking.Status,
+		&booking.TotalPrice, &booking.Status, &expiresAt,
 		&booking.CreatedAt, &booking.UpdatedAt,
 	)
 	if err != nil {
@@ -65,6 +66,7 @@ func (r *bookingRepo) GetByID(ctx context.Context, id string) (*entities.Booking
 		}
 		return nil, fmt.Errorf("query booking by id: %w", err)
 	}
+	booking.ExpiresAt = &expiresAt
 
 	rows, err := r.exec(ctx).QueryContext(ctx,
 		`SELECT ticket_id FROM booking_tickets WHERE booking_id = $1`,
@@ -91,7 +93,7 @@ func (r *bookingRepo) GetByID(ctx context.Context, id string) (*entities.Booking
 
 func (r *bookingRepo) GetByUserID(ctx context.Context, userID string) ([]entities.Booking, error) {
 	rows, err := r.exec(ctx).QueryContext(ctx,
-		`SELECT b.id, b.user_id, b.event_id, b.total_price, b.status, b.created_at, b.updated_at
+		`SELECT b.id, b.user_id, b.event_id, b.total_price, b.status, b.expires_at, b.created_at, b.updated_at
 		 FROM bookings b
 		 WHERE b.user_id = $1 AND b.status IN ('RESERVED', 'CONFIRMED')
 		 ORDER BY b.created_at DESC`,
@@ -105,13 +107,15 @@ func (r *bookingRepo) GetByUserID(ctx context.Context, userID string) ([]entitie
 	var bookings []entities.Booking
 	for rows.Next() {
 		var b entities.Booking
+		var expiresAt time.Time
 		if err := rows.Scan(
 			&b.ID, &b.UserID, &b.EventID,
-			&b.TotalPrice, &b.Status,
+			&b.TotalPrice, &b.Status, &expiresAt,
 			&b.CreatedAt, &b.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan booking row: %w", err)
 		}
+		b.ExpiresAt = &expiresAt
 
 		ticketRows, err := r.exec(ctx).QueryContext(ctx,
 			`SELECT ticket_id FROM booking_tickets WHERE booking_id = $1`,
@@ -154,14 +158,13 @@ func (r *bookingRepo) UpdateStatus(ctx context.Context, bookingID string, status
 	return nil
 }
 
-// CancelExpiredReservations cancels booking records whose RESERVED state has exceeded
-// the TTL. Tickets are left untouched — they stay AVAILABLE in the DB throughout
-// the reservation window (Redis lock is the reservation; TTL expiry frees the seat).
-func (r *bookingRepo) CancelExpiredReservations(ctx context.Context, before time.Time) error {
+// CancelExpiredReservations cancels booking records whose expires_at has passed.
+// Tickets are left untouched — they stay AVAILABLE in the DB throughout
+// the reservation window (Redis TTL expiry frees the seat automatically).
+func (r *bookingRepo) CancelExpiredReservations(ctx context.Context) error {
 	_, err := r.exec(ctx).ExecContext(ctx,
 		`UPDATE bookings SET status = 'CANCELLED', updated_at = NOW()
-		 WHERE status = 'RESERVED' AND created_at < $1`,
-		before,
+		 WHERE status = 'RESERVED' AND expires_at < NOW()`,
 	)
 	if err != nil {
 		return fmt.Errorf("cancel expired reservations: %w", err)

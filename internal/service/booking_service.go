@@ -43,8 +43,7 @@ func NewBookingService(
 func (s *bookingService) Reserve(ctx context.Context, userID, eventID string, quantity int) (*entities.Booking, error) {
 	// 1. Lazily cancel stale booking records (tickets are already AVAILABLE in DB;
 	//    Redis TTL expiry is what frees the seat — no ticket update needed here).
-	cutoff := time.Now().Add(-s.reservationTTL)
-	if err := s.bookingRepo.CancelExpiredReservations(ctx, cutoff); err != nil {
+	if err := s.bookingRepo.CancelExpiredReservations(ctx); err != nil {
 		slog.Warn("failed to cleanup expired reservations", "error", err)
 	}
 
@@ -160,10 +159,16 @@ func (s *bookingService) Confirm(ctx context.Context, userID, bookingID string) 
 		}
 	}
 
-	// 5. DB transaction: mark tickets as BOOKED + confirm booking
+	// 5. DB transaction: mark tickets as BOOKED + confirm booking.
+	// BulkUpdateStatus only updates tickets still AVAILABLE, so if another
+	// Confirm raced us after our Redis check, rowsAffected < len(ticketIDs).
 	err = s.transactor.WithTransaction(ctx, func(txCtx context.Context) error {
-		if txErr := s.ticketRepo.BulkUpdateStatus(txCtx, booking.TicketIDs, entities.TicketStatusBooked, &booking.ID); txErr != nil {
+		n, txErr := s.ticketRepo.BulkUpdateStatus(txCtx, booking.TicketIDs, entities.TicketStatusBooked, &booking.ID)
+		if txErr != nil {
 			return txErr
+		}
+		if int(n) != len(booking.TicketIDs) {
+			return entities.ErrTicketUnavailable
 		}
 		return s.bookingRepo.UpdateStatus(txCtx, bookingID, entities.BookingStatusConfirmed)
 	})
@@ -223,7 +228,7 @@ func (s *bookingService) Cancel(ctx context.Context, userID, bookingID string) e
 		// RESERVED bookings keep tickets AVAILABLE in DB throughout (Redis lock is the hold),
 		// so no ticket update is needed.
 		if booking.Status == entities.BookingStatusConfirmed {
-			if txErr := s.ticketRepo.BulkUpdateStatus(txCtx, booking.TicketIDs, entities.TicketStatusAvailable, nil); txErr != nil {
+			if _, txErr := s.ticketRepo.BulkUpdateStatus(txCtx, booking.TicketIDs, entities.TicketStatusAvailable, nil); txErr != nil {
 				return txErr
 			}
 		}
@@ -254,8 +259,7 @@ func (s *bookingService) Cancel(ctx context.Context, userID, bookingID string) e
 
 func (s *bookingService) GetUserBookings(ctx context.Context, userID string) ([]entities.Booking, error) {
 	// Lazily cancel expired booking records so they don't appear in My Bookings.
-	cutoff := time.Now().Add(-s.reservationTTL)
-	if err := s.bookingRepo.CancelExpiredReservations(ctx, cutoff); err != nil {
+	if err := s.bookingRepo.CancelExpiredReservations(ctx); err != nil {
 		slog.Warn("failed to cleanup expired reservations", "error", err)
 	}
 
@@ -263,10 +267,11 @@ func (s *bookingService) GetUserBookings(ctx context.Context, userID string) ([]
 	if err != nil {
 		return nil, err
 	}
+	// ExpiresAt is read from DB; nil it out for non-RESERVED bookings so it's
+	// not included in the JSON response where it has no meaning.
 	for i := range bookings {
-		if bookings[i].Status == entities.BookingStatusReserved {
-			expiresAt := bookings[i].CreatedAt.Add(s.reservationTTL)
-			bookings[i].ExpiresAt = &expiresAt
+		if bookings[i].Status != entities.BookingStatusReserved {
+			bookings[i].ExpiresAt = nil
 		}
 	}
 	return bookings, nil

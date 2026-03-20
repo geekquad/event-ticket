@@ -29,7 +29,7 @@ func (r *eventRepo) GetByID(ctx context.Context, id string) (*entities.Event, er
 			(SELECT COUNT(*) FROM tickets t WHERE t.event_id = e.id AND t.status = 'AVAILABLE')
 			- (SELECT COUNT(bt.ticket_id) FROM booking_tickets bt
 			   JOIN bookings b ON b.id = bt.booking_id
-			   WHERE b.event_id = e.id AND b.status = 'RESERVED') as available_count,
+			   WHERE b.event_id = e.id AND b.status = 'RESERVED' AND b.expires_at > NOW()) as available_count,
 			e.created_at,
 			v.id, v.name, v.address, v.capacity, v.seat_map, v.created_at,
 			p.id, p.name, p.description, p.created_at
@@ -100,7 +100,7 @@ func (r *eventRepo) List(ctx context.Context, params ports.EventSearchParams) ([
 			(SELECT COUNT(*) FROM tickets t WHERE t.event_id = e.id AND t.status = 'AVAILABLE')
 			- (SELECT COUNT(bt.ticket_id) FROM booking_tickets bt
 			   JOIN bookings b ON b.id = bt.booking_id
-			   WHERE b.event_id = e.id AND b.status = 'RESERVED') as available_count,
+			   WHERE b.event_id = e.id AND b.status = 'RESERVED' AND b.expires_at > NOW()) as available_count,
 			e.created_at,
 			v.id, v.name, v.address, v.capacity, v.seat_map, v.created_at,
 			p.id, p.name, p.description, p.created_at

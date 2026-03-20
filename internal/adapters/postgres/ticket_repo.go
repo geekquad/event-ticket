@@ -113,13 +113,29 @@ func (r *ticketRepo) GetByIDs(ctx context.Context, ids []string) ([]entities.Tic
 	return tickets, nil
 }
 
-func (r *ticketRepo) BulkUpdateStatus(ctx context.Context, ticketIDs []string, status entities.TicketStatus, bookingID *string) error {
-	_, err := r.exec(ctx).ExecContext(ctx,
-		`UPDATE tickets SET status = $1, booking_id = $2 WHERE id = ANY($3)`,
-		status, bookingID, pq.Array(ticketIDs),
-	)
-	if err != nil {
-		return fmt.Errorf("bulk update ticket status: %w", err)
+func (r *ticketRepo) BulkUpdateStatus(ctx context.Context, ticketIDs []string, status entities.TicketStatus, bookingID *string) (int64, error) {
+	var result sql.Result
+	var err error
+	if status == entities.TicketStatusBooked {
+		// Guard against TOCTOU: only update tickets that are still AVAILABLE.
+		// If another Confirm raced us, rowsAffected < len(ticketIDs) and the
+		// caller can detect the conflict without any additional query.
+		result, err = r.exec(ctx).ExecContext(ctx,
+			`UPDATE tickets SET status = $1, booking_id = $2 WHERE id = ANY($3) AND status = 'AVAILABLE'`,
+			status, bookingID, pq.Array(ticketIDs),
+		)
+	} else {
+		result, err = r.exec(ctx).ExecContext(ctx,
+			`UPDATE tickets SET status = $1, booking_id = $2 WHERE id = ANY($3)`,
+			status, bookingID, pq.Array(ticketIDs),
+		)
 	}
-	return nil
+	if err != nil {
+		return 0, fmt.Errorf("bulk update ticket status: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	return n, nil
 }

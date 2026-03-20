@@ -70,5 +70,5 @@ SELECT
     'FLOOR',
     75.00
 FROM events e
-CROSS JOIN generate_series(1, 5) AS n
+CROSS JOIN generate_series(1, 2) AS n
 WHERE e.name = 'Intimate Jazz Evening';
