@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"ticket/internal/entities"
 	"ticket/internal/ports"
@@ -149,6 +150,31 @@ func (r *bookingRepo) UpdateStatus(ctx context.Context, bookingID string, status
 	)
 	if err != nil {
 		return fmt.Errorf("update booking status: %w", err)
+	}
+	return nil
+}
+
+// CancelExpiredReservations releases tickets and cancels bookings whose RESERVED state
+// has exceeded the TTL. Called lazily before each reserve attempt.
+func (r *bookingRepo) CancelExpiredReservations(ctx context.Context, before time.Time) error {
+	_, err := r.exec(ctx).ExecContext(ctx, `
+		WITH expired AS (
+			SELECT id FROM bookings
+			WHERE status = 'RESERVED' AND created_at < $1
+		),
+		reset_tickets AS (
+			UPDATE tickets SET status = 'AVAILABLE'
+			WHERE status = 'RESERVED'
+			  AND id IN (
+				SELECT ticket_id FROM booking_tickets
+				WHERE booking_id IN (SELECT id FROM expired)
+			  )
+		)
+		UPDATE bookings SET status = 'CANCELLED', updated_at = NOW()
+		WHERE id IN (SELECT id FROM expired)
+	`, before)
+	if err != nil {
+		return fmt.Errorf("cancel expired reservations: %w", err)
 	}
 	return nil
 }

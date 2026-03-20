@@ -12,7 +12,7 @@ type EventService interface {
 }
 
 type BookingService interface {
-	Reserve(ctx context.Context, userID string, ticketIDs []string) (*entities.Booking, error)
+	Reserve(ctx context.Context, userID, eventID string, quantity int) (*entities.Booking, error)
 	Confirm(ctx context.Context, userID, bookingID string) (*entities.Booking, error)
 	Cancel(ctx context.Context, userID, bookingID string) error
 	GetUserBookings(ctx context.Context, userID string) ([]entities.Booking, error)

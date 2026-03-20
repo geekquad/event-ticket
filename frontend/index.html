@@ -104,8 +104,42 @@
       justify-content: space-between;
     }
 
+    /* Quantity stepper + reserve row */
+    .reserve-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: auto;
+    }
+    .qty-stepper {
+      display: flex;
+      align-items: center;
+      border: 1.5px solid #ddd;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .qty-stepper button {
+      width: 28px;
+      height: 28px;
+      border: none;
+      background: #f5f5f5;
+      font-size: 1rem;
+      cursor: pointer;
+      line-height: 1;
+      color: #333;
+    }
+    .qty-stepper button:hover { background: #e8e8e8; }
+    .qty-stepper span {
+      width: 28px;
+      text-align: center;
+      font-size: 0.875rem;
+      font-weight: 600;
+      user-select: none;
+    }
+
     /* ── Buttons ─────────────────────────────────────────────────────────────── */
     .btn {
+      flex: 1;
       padding: 0.5rem 1rem;
       border: none;
       border-radius: 6px;
@@ -115,15 +149,15 @@
       transition: opacity 0.15s, background 0.15s;
     }
     .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-    .btn-primary   { background: #1a1a2e; color: #fff; }
-    .btn-primary:hover:not(:disabled)   { background: #2d2d5e; }
-    .btn-success   { background: #388e3c; color: #fff; }
-    .btn-success:hover:not(:disabled)   { background: #2e7d32; }
-    .btn-danger    { background: #f44336; color: #fff; }
-    .btn-danger:hover:not(:disabled)    { background: #c62828; }
-    .btn-outline   { background: transparent; color: #1a1a2e; border: 1.5px solid #1a1a2e; }
+    .btn-primary  { background: #1a1a2e; color: #fff; }
+    .btn-primary:hover:not(:disabled)  { background: #2d2d5e; }
+    .btn-success  { background: #388e3c; color: #fff; }
+    .btn-success:hover:not(:disabled)  { background: #2e7d32; }
+    .btn-danger   { background: #f44336; color: #fff; }
+    .btn-danger:hover:not(:disabled)   { background: #c62828; }
+    .btn-outline  { background: transparent; color: #1a1a2e; border: 1.5px solid #1a1a2e; }
     .btn-outline:hover:not(:disabled)  { background: #f0f0f8; }
-    .btn-sm { padding: 0.3rem 0.7rem; font-size: 0.8rem; }
+    .btn-sm { padding: 0.3rem 0.7rem; font-size: 0.8rem; flex: unset; }
 
     .badge-sold-out {
       display: inline-block;
@@ -136,103 +170,6 @@
       text-transform: uppercase;
       letter-spacing: 0.05em;
     }
-
-    /* ── Seat selection modal ────────────────────────────────────────────────── */
-    .modal-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.55);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 200;
-      padding: 1rem;
-    }
-    .modal-overlay.hidden { display: none; }
-
-    .modal {
-      background: #fff;
-      border-radius: 12px;
-      width: 100%;
-      max-width: 620px;
-      max-height: 85vh;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-    }
-    .modal-header {
-      padding: 1.25rem 1.5rem 1rem;
-      border-bottom: 1px solid #ececec;
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 1rem;
-      position: sticky;
-      top: 0;
-      background: #fff;
-      z-index: 1;
-    }
-    .modal-header h3 { font-size: 1.05rem; font-weight: 700; }
-    .modal-header .subtitle { font-size: 0.8rem; color: #777; margin-top: 0.2rem; }
-    .modal-close {
-      background: none;
-      border: none;
-      font-size: 1.4rem;
-      cursor: pointer;
-      color: #888;
-      line-height: 1;
-      padding: 0.1rem;
-    }
-    .modal-close:hover { color: #333; }
-    .modal-body { padding: 1rem 1.5rem; flex: 1; }
-    .modal-footer {
-      padding: 1rem 1.5rem;
-      border-top: 1px solid #ececec;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      position: sticky;
-      bottom: 0;
-      background: #fff;
-    }
-    .modal-footer .total-price {
-      font-size: 0.9rem;
-      color: #333;
-    }
-    .modal-footer .total-price strong { font-size: 1.1rem; color: #1a1a2e; }
-
-    /* Ticket items */
-    .section-label {
-      font-size: 0.75rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: #888;
-      margin: 1rem 0 0.5rem;
-    }
-    .section-label:first-child { margin-top: 0; }
-
-    .ticket-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-      gap: 0.5rem;
-    }
-    .ticket-chip {
-      border: 1.5px solid #e0e0e0;
-      border-radius: 8px;
-      padding: 0.6rem 0.75rem;
-      cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
-      user-select: none;
-    }
-    .ticket-chip:hover:not(.unavailable) { border-color: #1a1a2e; background: #f7f7fb; }
-    .ticket-chip.selected { border-color: #1a1a2e; background: #eeeef8; }
-    .ticket-chip.unavailable { opacity: 0.4; cursor: not-allowed; }
-    .ticket-chip input[type="checkbox"] { display: none; }
-    .ticket-chip .seat-label { font-size: 0.85rem; font-weight: 600; color: #222; }
-    .ticket-chip .seat-price { font-size: 0.75rem; color: #777; margin-top: 0.15rem; }
-    .ticket-chip .seat-status { font-size: 0.7rem; color: #f44336; margin-top: 0.15rem; }
 
     /* ── Toast ───────────────────────────────────────────────────────────────── */
     #toast {
@@ -266,11 +203,11 @@
       align-items: flex-start;
       gap: 1rem;
     }
-    .booking-item.reserved { border-left: 4px solid #ff9800; }
+    .booking-item.reserved  { border-left: 4px solid #ff9800; }
     .booking-item.confirmed { border-left: 4px solid #4caf50; }
 
     .booking-item .info h3 { font-size: 0.95rem; font-weight: 600; }
-    .booking-item .info p { font-size: 0.8rem; color: #777; margin-top: 0.2rem; }
+    .booking-item .info p  { font-size: 0.8rem; color: #777; margin-top: 0.2rem; }
     .booking-item .info .booking-id { font-size: 0.75rem; color: #aaa; margin-top: 0.15rem; font-family: monospace; }
 
     .badge {
@@ -284,7 +221,6 @@
     }
     .badge-reserved-label  { background: #fff3e0; color: #e65100; }
     .badge-confirmed-label { background: #e8f5e9; color: #1b5e20; }
-    .badge-cancelled-label { background: #fafafa; color: #999; }
 
     .countdown {
       display: inline-flex;
@@ -295,7 +231,7 @@
       color: #e65100;
       margin-top: 0.3rem;
     }
-    .countdown.urgent { color: #d32f2f; }
+    .countdown.urgent  { color: #d32f2f; }
     .countdown.expired { color: #999; }
 
     .booking-actions {
@@ -348,47 +284,16 @@
   </div>
 </main>
 
-<!-- Seat selection modal -->
-<div id="seatModal" class="modal-overlay hidden" onclick="handleModalBackdropClick(event)">
-  <div class="modal" onclick="event.stopPropagation()">
-    <div class="modal-header">
-      <div>
-        <h3 id="modalEventName">Select Seats</h3>
-        <div class="subtitle" id="modalEventMeta"></div>
-      </div>
-      <button class="modal-close" onclick="closeSeatModal()">✕</button>
-    </div>
-    <div class="modal-body" id="modalBody">
-      <div class="spinner"></div>
-    </div>
-    <div class="modal-footer">
-      <div class="total-price">
-        Selected: <strong id="selectedTotal">$0.00</strong>
-        <span id="selectedCount" style="color:#777; font-size:0.8rem;"></span>
-      </div>
-      <button id="reserveBtn" class="btn btn-primary" disabled onclick="reserveSelected()">
-        Reserve Seats
-      </button>
-    </div>
-  </div>
-</div>
-
 <div id="toast"></div>
 
 <script>
-  // Same hostname as the page (localhost vs 127.0.0.1) so the browser origin matches the API host.
+  // Same hostname as the page so the browser origin matches the API host.
   const API = `http://${window.location.hostname}:8085`;
   const RESERVATION_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
   // ── State ──────────────────────────────────────────────────────────────────
   let currentUserID = '';
   let eventsCache   = [];
-
-  // Seat modal state
-  let modalEventID   = null;
-  let selectedTickets = {}; // ticketId → ticket object
-
-  // Countdown timer intervals keyed by bookingId
   let countdownIntervals = {};
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -409,9 +314,8 @@
   }
 
   async function apiFetch(path, options = {}) {
-    const uid = currentUserID;
     const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-    if (uid) headers['X-User-ID'] = uid;
+    if (currentUserID) headers['X-User-ID'] = currentUserID;
     const res = await fetch(`${API}${path}`, { ...options, headers });
     if (res.status === 204) return null;
     const body = await res.json().catch(() => ({}));
@@ -479,11 +383,11 @@
   }
 
   function buildEventCard(ev) {
-    const isSoldOut   = ev.availableCount === 0;
-    const booked      = ev.capacity - ev.availableCount;
-    const pct         = ev.capacity > 0 ? Math.round((booked / ev.capacity) * 100) : 0;
-    const fillClass   = pct >= 100 ? 'full' : pct >= 75 ? 'warn' : '';
-    const date        = new Date(ev.dateTime).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    const isSoldOut = ev.availableCount === 0;
+    const booked    = ev.capacity - ev.availableCount;
+    const pct       = ev.capacity > 0 ? Math.round((booked / ev.capacity) * 100) : 0;
+    const fillClass = pct >= 100 ? 'full' : pct >= 75 ? 'warn' : '';
+    const date      = new Date(ev.dateTime).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
     const card = document.createElement('div');
     card.className = 'event-card';
@@ -503,145 +407,65 @@
       </div>
     `;
 
+    // Quantity stepper + reserve button
+    const reserveRow = document.createElement('div');
+    reserveRow.className = 'reserve-row';
+
+    let quantity = 1;
+
+    if (!isSoldOut) {
+      const stepper = document.createElement('div');
+      stepper.className = 'qty-stepper';
+      const qtySpan = document.createElement('span');
+      qtySpan.textContent = '1';
+
+      const dec = document.createElement('button');
+      dec.textContent = '−';
+      dec.onclick = () => {
+        if (quantity > 1) { quantity--; qtySpan.textContent = quantity; }
+      };
+      const inc = document.createElement('button');
+      inc.textContent = '+';
+      inc.onclick = () => {
+        if (quantity < ev.availableCount) { quantity++; qtySpan.textContent = quantity; }
+      };
+
+      stepper.appendChild(dec);
+      stepper.appendChild(qtySpan);
+      stepper.appendChild(inc);
+      reserveRow.appendChild(stepper);
+    }
+
     const btn = document.createElement('button');
     btn.className = 'btn btn-primary';
-    btn.style.marginTop = 'auto';
-    btn.textContent = isSoldOut ? 'Sold Out' : 'Select Seats';
+    btn.textContent = isSoldOut ? 'Sold Out' : 'Reserve';
     btn.disabled    = isSoldOut || !currentUserID;
     btn.title       = !currentUserID ? 'Select a user first' : '';
-    btn.onclick     = () => openSeatModal(ev);
-    card.appendChild(btn);
+    btn.onclick     = () => reserveEvent(ev.id, quantity, btn);
+    reserveRow.appendChild(btn);
 
+    card.appendChild(reserveRow);
     return card;
   }
 
-  // ── Seat selection modal ────────────────────────────────────────────────────
-
-  async function openSeatModal(ev) {
+  async function reserveEvent(eventID, quantity, btn) {
     if (!currentUserID) { showToast('Please select a user first', 'error'); return; }
-
-    // Reset state
-    modalEventID    = ev.id;
-    selectedTickets = {};
-
-    // Show modal with spinner
-    document.getElementById('modalEventName').textContent = ev.name;
-    document.getElementById('modalEventMeta').textContent =
-      new Date(ev.dateTime).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-      + '  ·  ' + (ev.venue?.name || '');
-    document.getElementById('modalBody').innerHTML = '<div class="spinner"></div>';
-    document.getElementById('selectedTotal').textContent = '$0.00';
-    document.getElementById('selectedCount').textContent = '';
-    document.getElementById('reserveBtn').disabled = true;
-    document.getElementById('seatModal').classList.remove('hidden');
-
-    try {
-      // Fetch single event to get ticket list
-      const data = await apiFetch(`/events/${ev.id}`);
-      const tickets = data.tickets || [];
-      renderSeatPicker(tickets);
-    } catch (e) {
-      document.getElementById('modalBody').innerHTML =
-        `<p class="empty-state">Failed to load seats: ${escHtml(e.message)}</p>`;
-    }
-  }
-
-  function closeSeatModal() {
-    document.getElementById('seatModal').classList.add('hidden');
-    selectedTickets = {};
-  }
-
-  function handleModalBackdropClick(e) {
-    if (e.target === document.getElementById('seatModal')) closeSeatModal();
-  }
-
-  function renderSeatPicker(tickets) {
-    const body = document.getElementById('modalBody');
-    if (!tickets.length) {
-      body.innerHTML = '<p class="empty-state">No seats available for this event.</p>';
-      return;
-    }
-
-    // Group by section
-    const sections = {};
-    tickets.forEach(t => {
-      const key = t.section || 'General';
-      if (!sections[key]) sections[key] = [];
-      sections[key].push(t);
-    });
-
-    body.innerHTML = '';
-    Object.entries(sections).forEach(([sectionName, sectionTickets]) => {
-      const label = document.createElement('div');
-      label.className = 'section-label';
-      label.textContent = `Section ${sectionName}`;
-      body.appendChild(label);
-
-      const grid = document.createElement('div');
-      grid.className = 'ticket-grid';
-
-      sectionTickets.forEach(t => {
-        const isUnavailable = t.status !== 'AVAILABLE';
-        const chip = document.createElement('label');
-        chip.className = 'ticket-chip' + (isUnavailable ? ' unavailable' : '');
-        chip.dataset.ticketId = t.id;
-        chip.innerHTML = `
-          <input type="checkbox" value="${t.id}" ${isUnavailable ? 'disabled' : ''} onchange="toggleTicket(this, ${JSON.stringify(t).replace(/"/g, '&quot;')})">
-          <div class="seat-label">Row ${escHtml(t.row)} · Seat ${escHtml(String(t.seatNumber))}</div>
-          <div class="seat-price">${formatCurrency(t.price)}</div>
-          ${isUnavailable ? '<div class="seat-status">Taken</div>' : ''}
-        `;
-        grid.appendChild(chip);
-      });
-
-      body.appendChild(grid);
-    });
-  }
-
-  function toggleTicket(checkbox, ticket) {
-    const chip = checkbox.closest('.ticket-chip');
-    if (checkbox.checked) {
-      selectedTickets[ticket.id] = ticket;
-      chip.classList.add('selected');
-    } else {
-      delete selectedTickets[ticket.id];
-      chip.classList.remove('selected');
-    }
-    updateModalFooter();
-  }
-
-  function updateModalFooter() {
-    const tickets = Object.values(selectedTickets);
-    const total   = tickets.reduce((s, t) => s + Number(t.price), 0);
-    const count   = tickets.length;
-    document.getElementById('selectedTotal').textContent = formatCurrency(total);
-    document.getElementById('selectedCount').textContent = count ? ` (${count} seat${count > 1 ? 's' : ''})` : '';
-    document.getElementById('reserveBtn').disabled = count === 0;
-  }
-
-  async function reserveSelected() {
-    const ticketIDs = Object.keys(selectedTickets);
-    if (!ticketIDs.length) return;
-
-    const btn = document.getElementById('reserveBtn');
     btn.disabled    = true;
     btn.textContent = 'Reserving…';
-
     try {
       await apiFetch('/booking/reserve', {
         method: 'POST',
-        body:   JSON.stringify({ ticketIds: ticketIDs }),
+        body:   JSON.stringify({ eventId: eventID, quantity }),
       });
-      closeSeatModal();
-      showToast('Seats reserved! You have 10 minutes to confirm.', 'success');
+      showToast(`${quantity} seat${quantity > 1 ? 's' : ''} reserved! Confirm within 10 minutes.`, 'success');
       await loadEvents();
-      // Switch to My Bookings tab
+      // Switch to My Bookings
       const bookingsBtn = document.querySelector('nav button:nth-child(2)');
       showPage('bookings', bookingsBtn);
     } catch (e) {
       showToast(`Reservation failed: ${e.message}`, 'error');
       btn.disabled    = false;
-      btn.textContent = 'Reserve Seats';
+      btn.textContent = 'Reserve';
     }
   }
 
@@ -690,21 +514,18 @@
 
       const item = document.createElement('div');
       item.className = `booking-item ${isReserved ? 'reserved' : isConfirmed ? 'confirmed' : ''}`;
-      item.id = `booking-item-${b.id}`;
 
-      // Build status badge
       let badgeHtml = '';
       if (isReserved)       badgeHtml = '<span class="badge badge-reserved-label">Reserved</span>';
       else if (isConfirmed) badgeHtml = '<span class="badge badge-confirmed-label">Confirmed</span>';
 
       const ticketCount = (b.ticketIds || []).length;
-      const price       = formatCurrency(b.totalPrice);
 
       item.innerHTML = `
         <div class="info">
           <h3>${escHtml(eventName)} ${badgeHtml}</h3>
           ${eventDate ? `<p>📅 ${eventDate}</p>` : ''}
-          <p>${ticketCount} seat${ticketCount !== 1 ? 's' : ''} &nbsp;·&nbsp; ${price}</p>
+          <p>${ticketCount} seat${ticketCount !== 1 ? 's' : ''} &nbsp;·&nbsp; ${formatCurrency(b.totalPrice)}</p>
           ${isReserved ? `<div class="countdown" id="countdown-${b.id}">⏰ calculating…</div>` : ''}
           <div class="booking-id">#${b.id}</div>
         </div>
@@ -713,22 +534,20 @@
 
       list.appendChild(item);
 
-      // Build action buttons
       const actions = item.querySelector(`#actions-${b.id}`);
 
       if (isReserved) {
         const confirmBtn = document.createElement('button');
-        confirmBtn.className = 'btn btn-success btn-sm';
+        confirmBtn.className = 'btn-sm btn btn-success';
         confirmBtn.textContent = 'Confirm Purchase';
         confirmBtn.onclick = () => confirmBooking(b.id, confirmBtn);
         actions.appendChild(confirmBtn);
-
         startCountdown(b, confirmBtn);
       }
 
       if (isReserved || isConfirmed) {
         const cancelBtn = document.createElement('button');
-        cancelBtn.className = 'btn btn-outline btn-sm';
+        cancelBtn.className = 'btn-sm btn btn-outline';
         cancelBtn.textContent = 'Cancel';
         cancelBtn.onclick = () => cancelBooking(b.id, cancelBtn);
         actions.appendChild(cancelBtn);
@@ -743,7 +562,7 @@
     const expiresAt = new Date(booking.createdAt).getTime() + RESERVATION_TTL_MS;
 
     function tick() {
-      const el        = document.getElementById(`countdown-${booking.id}`);
+      const el = document.getElementById(`countdown-${booking.id}`);
       if (!el) { clearInterval(countdownIntervals[booking.id]); return; }
 
       const remaining = expiresAt - Date.now();

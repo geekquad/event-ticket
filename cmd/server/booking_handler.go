@@ -17,7 +17,8 @@ func NewBookingHandler(bookingService ports.BookingService) *BookingHandler {
 }
 
 type reserveRequest struct {
-	TicketIDs []string `json:"ticketIds" binding:"required"`
+	EventID  string `json:"eventId" binding:"required"`
+	Quantity int    `json:"quantity"`
 }
 
 // POST /booking/reserve
@@ -34,7 +35,11 @@ func (h *BookingHandler) Reserve(c *gin.Context) {
 		return
 	}
 
-	booking, err := h.bookingService.Reserve(c.Request.Context(), userID, req.TicketIDs)
+	if req.Quantity <= 0 {
+		req.Quantity = 1
+	}
+
+	booking, err := h.bookingService.Reserve(c.Request.Context(), userID, req.EventID, req.Quantity)
 	if err != nil {
 		handleError(c, err)
 		return

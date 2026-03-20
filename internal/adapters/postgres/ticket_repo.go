@@ -53,6 +53,38 @@ func (r *ticketRepo) GetByEventID(ctx context.Context, eventID string) ([]entiti
 	return tickets, nil
 }
 
+func (r *ticketRepo) GetAvailableByEventID(ctx context.Context, eventID string, limit int) ([]entities.Ticket, error) {
+	rows, err := r.exec(ctx).QueryContext(ctx,
+		`SELECT id, event_id, seat_number, row, section, price, status, booking_id, created_at
+		 FROM tickets
+		 WHERE event_id = $1 AND status = 'AVAILABLE'
+		 ORDER BY section, row, seat_number
+		 LIMIT $2
+		 FOR UPDATE SKIP LOCKED`,
+		eventID, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query available tickets: %w", err)
+	}
+	defer rows.Close()
+
+	var tickets []entities.Ticket
+	for rows.Next() {
+		var t entities.Ticket
+		if err := rows.Scan(
+			&t.ID, &t.EventID, &t.SeatNumber, &t.Row, &t.Section,
+			&t.Price, &t.Status, &t.BookingID, &t.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan ticket row: %w", err)
+		}
+		tickets = append(tickets, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate ticket rows: %w", err)
+	}
+	return tickets, nil
+}
+
 func (r *ticketRepo) GetByIDs(ctx context.Context, ids []string) ([]entities.Ticket, error) {
 	rows, err := r.exec(ctx).QueryContext(ctx,
 		`SELECT id, event_id, seat_number, row, section, price, status, booking_id, created_at

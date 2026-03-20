@@ -22,6 +22,7 @@ type EventRepository interface {
 
 type TicketRepository interface {
 	GetByEventID(ctx context.Context, eventID string) ([]entities.Ticket, error)
+	GetAvailableByEventID(ctx context.Context, eventID string, limit int) ([]entities.Ticket, error)
 	GetByIDs(ctx context.Context, ids []string) ([]entities.Ticket, error)
 	BulkUpdateStatus(ctx context.Context, ticketIDs []string, status entities.TicketStatus, bookingID *string) error
 }
@@ -31,6 +32,7 @@ type BookingRepository interface {
 	GetByID(ctx context.Context, id string) (*entities.Booking, error)
 	GetByUserID(ctx context.Context, userID string) ([]entities.Booking, error)
 	UpdateStatus(ctx context.Context, bookingID string, status entities.BookingStatus) error
+	CancelExpiredReservations(ctx context.Context, before time.Time) error
 }
 
 type AuditRepository interface {
