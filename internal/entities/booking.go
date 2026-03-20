@@ -17,6 +17,7 @@ type Booking struct {
 	TicketIDs  []string      `json:"ticketIds"`
 	TotalPrice float64       `json:"totalPrice"`
 	Status     BookingStatus `json:"status"`
+	ExpiresAt  *time.Time    `json:"expiresAt,omitempty"` // set for RESERVED bookings only
 	CreatedAt  time.Time     `json:"createdAt"`
 	UpdatedAt  time.Time     `json:"updatedAt"`
 }

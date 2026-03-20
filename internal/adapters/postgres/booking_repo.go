@@ -154,25 +154,15 @@ func (r *bookingRepo) UpdateStatus(ctx context.Context, bookingID string, status
 	return nil
 }
 
-// CancelExpiredReservations releases tickets and cancels bookings whose RESERVED state
-// has exceeded the TTL. Called lazily before each reserve attempt.
+// CancelExpiredReservations cancels booking records whose RESERVED state has exceeded
+// the TTL. Tickets are left untouched — they stay AVAILABLE in the DB throughout
+// the reservation window (Redis lock is the reservation; TTL expiry frees the seat).
 func (r *bookingRepo) CancelExpiredReservations(ctx context.Context, before time.Time) error {
-	_, err := r.exec(ctx).ExecContext(ctx, `
-		WITH expired AS (
-			SELECT id FROM bookings
-			WHERE status = 'RESERVED' AND created_at < $1
-		),
-		reset_tickets AS (
-			UPDATE tickets SET status = 'AVAILABLE'
-			WHERE status = 'RESERVED'
-			  AND id IN (
-				SELECT ticket_id FROM booking_tickets
-				WHERE booking_id IN (SELECT id FROM expired)
-			  )
-		)
-		UPDATE bookings SET status = 'CANCELLED', updated_at = NOW()
-		WHERE id IN (SELECT id FROM expired)
-	`, before)
+	_, err := r.exec(ctx).ExecContext(ctx,
+		`UPDATE bookings SET status = 'CANCELLED', updated_at = NOW()
+		 WHERE status = 'RESERVED' AND created_at < $1`,
+		before,
+	)
 	if err != nil {
 		return fmt.Errorf("cancel expired reservations: %w", err)
 	}

@@ -268,8 +268,8 @@
 </header>
 
 <nav>
-  <button class="active" onclick="showPage('events', this)">Events</button>
-  <button onclick="showPage('bookings', this)">My Bookings</button>
+  <button data-page="events" class="active" onclick="showPage('events')">Events</button>
+  <button data-page="bookings" onclick="showPage('bookings')">My Bookings</button>
 </nav>
 
 <main>
@@ -289,10 +289,9 @@
 <script>
   // Same hostname as the page so the browser origin matches the API host.
   const API = `http://${window.location.hostname}:8085`;
-  const RESERVATION_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
   // ── State ──────────────────────────────────────────────────────────────────
-  let currentUserID = '';
+  let currentUserID = localStorage.getItem('userId') || '';
   let eventsCache   = [];
   let countdownIntervals = {};
 
@@ -304,11 +303,16 @@
     setTimeout(() => { t.className = ''; }, 3500);
   }
 
-  function showPage(name, btn) {
+  function activateTab(name) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
     document.getElementById(`page-${name}`).classList.add('active');
-    btn.classList.add('active');
+    document.querySelector(`nav button[data-page="${name}"]`).classList.add('active');
+    localStorage.setItem('activeTab', name);
+  }
+
+  function showPage(name) {
+    activateTab(name);
     if (name === 'bookings') loadMyBookings();
     if (name === 'events')   loadEvents();
   }
@@ -346,6 +350,16 @@
         opt.textContent = u.name;
         sel.appendChild(opt);
       });
+      // Restore previously selected user
+      if (currentUserID) {
+        sel.value = currentUserID;
+        if (!sel.value) {
+          // Saved ID no longer exists in the list
+          currentUserID = '';
+          localStorage.removeItem('userId');
+        }
+        loadEvents();
+      }
     } catch (e) {
       console.error('Failed to load users', e);
     }
@@ -353,6 +367,11 @@
 
   document.getElementById('userSelect').addEventListener('change', e => {
     currentUserID = e.target.value;
+    if (currentUserID) {
+      localStorage.setItem('userId', currentUserID);
+    } else {
+      localStorage.removeItem('userId');
+    }
     loadEvents();
   });
 
@@ -457,11 +476,9 @@
         method: 'POST',
         body:   JSON.stringify({ eventId: eventID, quantity }),
       });
-      showToast(`${quantity} seat${quantity > 1 ? 's' : ''} reserved! Confirm within 10 minutes.`, 'success');
+      showToast(`${quantity} seat${quantity > 1 ? 's' : ''} reserved! Confirm within the given time.`, 'success');
       await loadEvents();
-      // Switch to My Bookings
-      const bookingsBtn = document.querySelector('nav button:nth-child(2)');
-      showPage('bookings', bookingsBtn);
+      showPage('bookings');
     } catch (e) {
       showToast(`Reservation failed: ${e.message}`, 'error');
       btn.disabled    = false;
@@ -559,7 +576,7 @@
   }
 
   function startCountdown(booking, confirmBtn) {
-    const expiresAt = new Date(booking.createdAt).getTime() + RESERVATION_TTL_MS;
+    const expiresAt = new Date(booking.expiresAt).getTime();
 
     function tick() {
       const el = document.getElementById(`countdown-${booking.id}`);
@@ -616,8 +633,12 @@
   }
 
   // ── Boot ───────────────────────────────────────────────────────────────────
-  loadUsers();
-  loadEvents();
+  loadUsers();        // restores user dropdown; calls loadEvents() when selection is applied
+  loadEvents();       // always pre-populate eventsCache (needed for booking event names)
+
+  const savedTab = localStorage.getItem('activeTab') || 'events';
+  activateTab(savedTab);                       // restore DOM state immediately (no flash)
+  if (savedTab === 'bookings') loadMyBookings(); // load bookings data if that tab is active
 </script>
 </body>
 </html>

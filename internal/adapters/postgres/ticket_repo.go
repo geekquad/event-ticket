@@ -59,8 +59,7 @@ func (r *ticketRepo) GetAvailableByEventID(ctx context.Context, eventID string, 
 		 FROM tickets
 		 WHERE event_id = $1 AND status = 'AVAILABLE'
 		 ORDER BY section, row, seat_number
-		 LIMIT $2
-		 FOR UPDATE SKIP LOCKED`,
+		 LIMIT $2`,
 		eventID, limit,
 	)
 	if err != nil {

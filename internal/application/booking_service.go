@@ -41,74 +41,81 @@ func NewBookingService(
 }
 
 func (s *bookingService) Reserve(ctx context.Context, userID, eventID string, quantity int) (*entities.Booking, error) {
-	// 1. Lazily expire stale reservations so their tickets become available again
+	// 1. Lazily cancel stale booking records (tickets are already AVAILABLE in DB;
+	//    Redis TTL expiry is what frees the seat — no ticket update needed here).
 	cutoff := time.Now().Add(-s.reservationTTL)
 	if err := s.bookingRepo.CancelExpiredReservations(ctx, cutoff); err != nil {
 		slog.Warn("failed to cleanup expired reservations", "error", err)
 	}
 
-	// 2. Atomically pick + mark tickets as RESERVED in the DB.
-	//    FOR UPDATE SKIP LOCKED inside the transaction prevents two concurrent
-	//    requests from selecting the same seats.
-	var tickets []entities.Ticket
-	var booking *entities.Booking
+	// 2. Fetch more candidates than needed so we can skip any that are already
+	//    Redis-locked by another active reservation.
+	fetchLimit := quantity * 5
+	if fetchLimit < 10 {
+		fetchLimit = 10
+	}
+	candidates, err := s.ticketRepo.GetAvailableByEventID(ctx, eventID, fetchLimit)
+	if err != nil {
+		return nil, fmt.Errorf("get available tickets: %w", err)
+	}
 
-	txErr := s.transactor.WithTransaction(ctx, func(txCtx context.Context) error {
-		var err error
-		tickets, err = s.ticketRepo.GetAvailableByEventID(txCtx, eventID, quantity)
-		if err != nil {
-			return fmt.Errorf("get available tickets: %w", err)
+	// 3. Acquire Redis locks -- skip tickets that are already held, stop when
+	//    we have enough. Roll back all acquired locks if we can't fill the quota.
+	var lockedTickets []entities.Ticket
+	var acquiredKeys []string
+	for _, t := range candidates {
+		if len(lockedTickets) == quantity {
+			break
 		}
-		if len(tickets) < quantity {
-			return entities.ErrTicketUnavailable
+		key := "ticket:" + t.ID
+		ok, lockErr := s.lockManager.Acquire(ctx, key, userID, s.reservationTTL)
+		if lockErr != nil {
+			s.releaseKeys(ctx, acquiredKeys, userID)
+			return nil, fmt.Errorf("acquire lock: %w", lockErr)
 		}
+		if ok {
+			lockedTickets = append(lockedTickets, t)
+			acquiredKeys = append(acquiredKeys, key)
+		}
+		// lock not acquired = another reservation holds it; just skip to next candidate
+	}
 
-		ticketIDs := make([]string, len(tickets))
-		for i, t := range tickets {
-			ticketIDs[i] = t.ID
-		}
-
-		if err := s.ticketRepo.BulkUpdateStatus(txCtx, ticketIDs, entities.TicketStatusReserved, nil); err != nil {
-			return fmt.Errorf("mark tickets reserved: %w", err)
-		}
-
-		var totalPrice float64
-		for _, t := range tickets {
-			totalPrice += t.Price
-		}
-
-		now := time.Now()
-		booking = &entities.Booking{
-			ID:         uuid.New().String(),
-			UserID:     userID,
-			EventID:    eventID,
-			TicketIDs:  ticketIDs,
-			TotalPrice: totalPrice,
-			Status:     entities.BookingStatusReserved,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		}
-		return s.bookingRepo.Create(txCtx, booking)
-	})
-
-	if txErr != nil {
+	if len(lockedTickets) < quantity {
+		s.releaseKeys(ctx, acquiredKeys, userID)
 		s.writeAudit(ctx, entities.AuditActionBookingCreated, entities.AuditOutcomeFailure,
-			"", userID, map[string]any{"reason": txErr.Error(), "eventId": eventID})
-		return nil, txErr
+			"", userID, map[string]any{"reason": "not enough available seats", "eventId": eventID})
+		return nil, entities.ErrTicketUnavailable
 	}
 
-	// 3. Set Redis TTL keys so Confirm can validate the reservation hasn't expired.
-	//    Non-critical: if Redis is down the user gets a 409 on Confirm.
-	for _, t := range tickets {
-		if _, err := s.lockManager.Acquire(ctx, "ticket:"+t.ID, userID, s.reservationTTL); err != nil {
-			slog.Error("failed to set reservation TTL", "ticketId", t.ID, "error", err)
-		}
-	}
-
-	ticketIDs := make([]string, len(tickets))
-	for i, t := range tickets {
+	// 4. Persist booking record. Tickets stay AVAILABLE in DB — Redis lock IS the reservation.
+	ticketIDs := make([]string, len(lockedTickets))
+	var totalPrice float64
+	for i, t := range lockedTickets {
 		ticketIDs[i] = t.ID
+		totalPrice += t.Price
 	}
+
+	now := time.Now()
+	expiresAt := now.Add(s.reservationTTL)
+	booking := &entities.Booking{
+		ID:         uuid.New().String(),
+		UserID:     userID,
+		EventID:    eventID,
+		TicketIDs:  ticketIDs,
+		TotalPrice: totalPrice,
+		Status:     entities.BookingStatusReserved,
+		ExpiresAt:  &expiresAt,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+
+	if err := s.bookingRepo.Create(ctx, booking); err != nil {
+		s.releaseKeys(ctx, acquiredKeys, userID)
+		s.writeAudit(ctx, entities.AuditActionBookingCreated, entities.AuditOutcomeFailure,
+			"", userID, map[string]any{"reason": err.Error(), "eventId": eventID})
+		return nil, fmt.Errorf("create booking: %w", err)
+	}
+
 	s.writeAudit(ctx, entities.AuditActionBookingCreated, entities.AuditOutcomeSuccess,
 		booking.ID, userID, map[string]any{
 			"bookingId": booking.ID,
@@ -212,8 +219,10 @@ func (s *bookingService) Cancel(ctx context.Context, userID, bookingID string) e
 
 	// 4. DB transaction
 	err = s.transactor.WithTransaction(ctx, func(txCtx context.Context) error {
-		// Release tickets back to AVAILABLE for both RESERVED and CONFIRMED bookings
-		if booking.Status == entities.BookingStatusReserved || booking.Status == entities.BookingStatusConfirmed {
+		// CONFIRMED bookings have tickets marked BOOKED in DB — restore them to AVAILABLE.
+		// RESERVED bookings keep tickets AVAILABLE in DB throughout (Redis lock is the hold),
+		// so no ticket update is needed.
+		if booking.Status == entities.BookingStatusConfirmed {
 			if txErr := s.ticketRepo.BulkUpdateStatus(txCtx, booking.TicketIDs, entities.TicketStatusAvailable, nil); txErr != nil {
 				return txErr
 			}
@@ -244,7 +253,23 @@ func (s *bookingService) Cancel(ctx context.Context, userID, bookingID string) e
 }
 
 func (s *bookingService) GetUserBookings(ctx context.Context, userID string) ([]entities.Booking, error) {
-	return s.bookingRepo.GetByUserID(ctx, userID)
+	// Lazily cancel expired booking records so they don't appear in My Bookings.
+	cutoff := time.Now().Add(-s.reservationTTL)
+	if err := s.bookingRepo.CancelExpiredReservations(ctx, cutoff); err != nil {
+		slog.Warn("failed to cleanup expired reservations", "error", err)
+	}
+
+	bookings, err := s.bookingRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range bookings {
+		if bookings[i].Status == entities.BookingStatusReserved {
+			expiresAt := bookings[i].CreatedAt.Add(s.reservationTTL)
+			bookings[i].ExpiresAt = &expiresAt
+		}
+	}
+	return bookings, nil
 }
 
 func (s *bookingService) releaseKeys(ctx context.Context, keys []string, value string) {
