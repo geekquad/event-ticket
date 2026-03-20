@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Event Ticket Booking</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1a1a2e;
+      color: #fff;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 700; }
+
+    .user-selector { display: flex; align-items: center; gap: 0.5rem; }
+    .user-selector label { font-size: 0.875rem; color: #ccc; }
+    .user-selector select {
+      padding: 0.35rem 0.6rem;
+      border-radius: 6px;
+      border: none;
+      font-size: 0.875rem;
+      background: #fff;
+      cursor: pointer;
+    }
+
+    nav {
+      background: #fff;
+      border-bottom: 1px solid #e0e0e0;
+      display: flex;
+      gap: 0;
+    }
+    nav button {
+      padding: 0.75rem 1.5rem;
+      border: none;
+      background: none;
+      cursor: pointer;
+      font-size: 0.9rem;
+      border-bottom: 3px solid transparent;
+      color: #555;
+    }
+    nav button.active {
+      border-bottom-color: #1a1a2e;
+      color: #1a1a2e;
+      font-weight: 600;
+    }
+
+    main { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+
+    .page { display: none; }
+    .page.active { display: block; }
+
+    h2 { font-size: 1.2rem; margin-bottom: 1rem; color: #333; }
+
+    /* Event cards */
+    .events-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 1rem;
+    }
+    .event-card {
+      background: #fff;
+      border-radius: 10px;
+      padding: 1.25rem;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .event-card h3 { font-size: 1rem; font-weight: 700; }
+    .event-card .meta { font-size: 0.8rem; color: #666; }
+    .event-card .venue { font-size: 0.8rem; color: #888; }
+    .capacity-bar {
+      height: 6px;
+      background: #e0e0e0;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 0.25rem;
+    }
+    .capacity-bar-fill {
+      height: 100%;
+      background: #4caf50;
+      border-radius: 3px;
+      transition: width 0.3s;
+    }
+    .capacity-bar-fill.warn { background: #ff9800; }
+    .capacity-bar-fill.full { background: #f44336; }
+    .capacity-label {
+      font-size: 0.78rem;
+      color: #555;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .btn {
+      padding: 0.5rem 1rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      cursor: pointer;
+      font-weight: 600;
+      margin-top: auto;
+      transition: opacity 0.15s;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #1a1a2e; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #2d2d5e; }
+    .btn-danger { background: #f44336; color: #fff; }
+    .btn-danger:hover:not(:disabled) { background: #c62828; }
+
+    .badge-sold-out {
+      display: inline-block;
+      background: #f44336;
+      color: #fff;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: #fff;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 999;
+    }
+    #toast.show { opacity: 1; }
+    #toast.success { background: #388e3c; }
+    #toast.error   { background: #d32f2f; }
+
+    /* My Bookings */
+    .booking-list { display: flex; flex-direction: column; gap: 0.75rem; }
+    .booking-item {
+      background: #fff;
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      gap: 1rem;
+    }
+    .booking-item .info h3 { font-size: 0.95rem; font-weight: 600; }
+    .booking-item .info p { font-size: 0.8rem; color: #777; margin-top: 0.2rem; }
+    .empty-state { color: #999; font-size: 0.9rem; text-align: center; padding: 2rem 0; }
+
+    .spinner {
+      border: 3px solid #e0e0e0;
+      border-top-color: #1a1a2e;
+      border-radius: 50%;
+      width: 28px; height: 28px;
+      animation: spin 0.7s linear infinite;
+      margin: 2rem auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🎟 Event Booking</h1>
+  <div class="user-selector">
+    <label for="userSelect">Booking as:</label>
+    <select id="userSelect">
+      <option value="">— select user —</option>
+    </select>
+  </div>
+</header>
+
+<nav>
+  <button class="active" onclick="showPage('events', this)">Events</button>
+  <button onclick="showPage('bookings', this)">My Bookings</button>
+</nav>
+
+<main>
+  <div id="page-events" class="page active">
+    <h2>Upcoming Events</h2>
+    <div id="events-container"><div class="spinner"></div></div>
+  </div>
+
+  <div id="page-bookings" class="page">
+    <h2>My Bookings</h2>
+    <div id="bookings-container"><div class="spinner"></div></div>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+  const API = 'http://localhost:8080';
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let currentUserID = '';
+  let eventsCache = [];
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function getUserID() { return currentUserID; }
+
+  function showToast(msg, type = 'success') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = `show ${type}`;
+    setTimeout(() => { t.className = ''; }, 3000);
+  }
+
+  function showPage(name, btn) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    document.getElementById(`page-${name}`).classList.add('active');
+    btn.classList.add('active');
+    if (name === 'bookings') loadMyBookings();
+    if (name === 'events')   loadEvents();
+  }
+
+  async function apiFetch(path, options = {}) {
+    const uid = getUserID();
+    const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+    if (uid) headers['X-User-ID'] = uid;
+    const res = await fetch(`${API}${path}`, { ...options, headers });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    return body;
+  }
+
+  // ── Users ──────────────────────────────────────────────────────────────────
+  async function loadUsers() {
+    try {
+      const { users } = await apiFetch('/users');
+      const sel = document.getElementById('userSelect');
+      (users || []).forEach(u => {
+        const opt = document.createElement('option');
+        opt.value = u.id;
+        opt.textContent = u.name;
+        sel.appendChild(opt);
+      });
+    } catch (e) {
+      console.error('Failed to load users', e);
+    }
+  }
+
+  document.getElementById('userSelect').addEventListener('change', e => {
+    currentUserID = e.target.value;
+    loadEvents();
+  });
+
+  // ── Events ─────────────────────────────────────────────────────────────────
+  async function loadEvents() {
+    const container = document.getElementById('events-container');
+    container.innerHTML = '<div class="spinner"></div>';
+    try {
+      const { events } = await apiFetch('/events');
+      eventsCache = events || [];
+      renderEvents(eventsCache);
+    } catch (e) {
+      container.innerHTML = `<p class="empty-state">Failed to load events: ${e.message}</p>`;
+    }
+  }
+
+  function renderEvents(events) {
+    const container = document.getElementById('events-container');
+    if (!events || events.length === 0) {
+      container.innerHTML = '<p class="empty-state">No events found.</p>';
+      return;
+    }
+    container.innerHTML = '';
+    const grid = document.createElement('div');
+    grid.className = 'events-grid';
+    events.forEach(ev => grid.appendChild(buildEventCard(ev)));
+    container.appendChild(grid);
+  }
+
+  function buildEventCard(ev) {
+    const isSoldOut = ev.remainingSpots === 0;
+    const pct = ev.capacity > 0 ? Math.round((ev.bookedCount / ev.capacity) * 100) : 0;
+    const fillClass = pct >= 100 ? 'full' : pct >= 75 ? 'warn' : '';
+    const date = new Date(ev.dateTime).toLocaleString(undefined, {
+      dateStyle: 'medium', timeStyle: 'short'
+    });
+
+    const card = document.createElement('div');
+    card.className = 'event-card';
+    card.innerHTML = `
+      <h3>${escHtml(ev.name)}</h3>
+      <p class="meta">📅 ${date}</p>
+      <p class="venue">📍 ${escHtml(ev.venue?.name || '')} &nbsp;·&nbsp; 🎤 ${escHtml(ev.performer?.name || '')}</p>
+      <div class="capacity-label">
+        <span>${isSoldOut ? '<span class="badge-sold-out">Sold out</span>' : `${ev.remainingSpots} spot${ev.remainingSpots !== 1 ? 's' : ''} left`}</span>
+        <span>${ev.bookedCount} / ${ev.capacity}</span>
+      </div>
+      <div class="capacity-bar"><div class="capacity-bar-fill ${fillClass}" style="width:${pct}%"></div></div>
+    `;
+
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-primary';
+    btn.textContent = isSoldOut ? 'Sold Out' : 'Book a Spot';
+    btn.disabled = isSoldOut || !currentUserID;
+    btn.title = !currentUserID ? 'Select a user first' : '';
+    btn.onclick = () => bookEvent(ev.id, btn);
+    card.appendChild(btn);
+
+    return card;
+  }
+
+  async function bookEvent(eventID, btn) {
+    if (!currentUserID) { showToast('Please select a user first', 'error'); return; }
+    btn.disabled = true;
+    btn.textContent = 'Booking…';
+    try {
+      await apiFetch('/bookings', {
+        method: 'POST',
+        body: JSON.stringify({ eventId: eventID }),
+      });
+      showToast('Booking confirmed!', 'success');
+      await loadEvents();
+    } catch (e) {
+      showToast(e.message === 'event is sold out' ? 'Sorry, just sold out!' : e.message, 'error');
+      await loadEvents(); // refresh to show updated count
+    }
+  }
+
+  // ── My Bookings ────────────────────────────────────────────────────────────
+  async function loadMyBookings() {
+    const container = document.getElementById('bookings-container');
+    if (!currentUserID) {
+      container.innerHTML = '<p class="empty-state">Select a user to view bookings.</p>';
+      return;
+    }
+    container.innerHTML = '<div class="spinner"></div>';
+    try {
+      const { bookings } = await apiFetch('/bookings/mine');
+      renderBookings(bookings || []);
+    } catch (e) {
+      container.innerHTML = `<p class="empty-state">Failed to load bookings: ${e.message}</p>`;
+    }
+  }
+
+  function renderBookings(bookings) {
+    const container = document.getElementById('bookings-container');
+    if (bookings.length === 0) {
+      container.innerHTML = '<p class="empty-state">No active bookings.</p>';
+      return;
+    }
+
+    const list = document.createElement('div');
+    list.className = 'booking-list';
+
+    bookings.forEach(b => {
+      const event = eventsCache.find(e => e.id === b.eventId);
+      const eventName = event ? event.name : b.eventId;
+      const date = event
+        ? new Date(event.dateTime).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+        : '';
+
+      const item = document.createElement('div');
+      item.className = 'booking-item';
+      item.innerHTML = `
+        <div class="info">
+          <h3>${escHtml(eventName)}</h3>
+          <p>${date ? `📅 ${date}` : ''} &nbsp; Booking #${b.id.slice(0, 8)}…</p>
+        </div>
+      `;
+
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-danger';
+      btn.textContent = 'Cancel';
+      btn.onclick = () => cancelBooking(b.id, btn);
+      item.appendChild(btn);
+      list.appendChild(item);
+    });
+
+    container.innerHTML = '';
+    container.appendChild(list);
+  }
+
+  async function cancelBooking(bookingID, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Cancelling…';
+    try {
+      await apiFetch(`/bookings/${bookingID}`, { method: 'DELETE' });
+      showToast('Booking cancelled. Spot returned.', 'success');
+      await Promise.all([loadMyBookings(), loadEvents()]);
+    } catch (e) {
+      showToast(`Cancel failed: ${e.message}`, 'error');
+      btn.disabled = false;
+      btn.textContent = 'Cancel';
+    }
+  }
+
+  // ── Utils ──────────────────────────────────────────────────────────────────
+  function escHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  // ── Boot ───────────────────────────────────────────────────────────────────
+  loadUsers();
+  loadEvents();
+</script>
+</body>
+</html>
