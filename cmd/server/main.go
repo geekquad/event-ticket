@@ -14,8 +14,8 @@ import (
 
 	"ticket/internal/adapters/postgres"
 	redisadapter "ticket/internal/adapters/redis"
-	"ticket/internal/application"
 	"ticket/internal/config"
+	"ticket/internal/service"
 )
 
 // loadDotEnv loads the first .env found walking up from the working directory
@@ -81,9 +81,9 @@ func main() {
 	lockManager := redisadapter.NewLockManager(redisClient)
 
 	// Services
-	eventService := application.NewEventService(eventRepo, ticketRepo)
-	bookingService := application.NewBookingService(bookingRepo, ticketRepo, auditRepo, lockManager, transactor, cfg.ReservationTTL)
-	userService := application.NewUserService(userRepo)
+	eventService := service.NewEventService(eventRepo, ticketRepo)
+	bookingService := service.NewBookingService(bookingRepo, ticketRepo, auditRepo, lockManager, transactor, cfg.ReservationTTL)
+	userService := service.NewUserService(userRepo)
 
 	router := NewRouter(eventService, bookingService, userService)
 
