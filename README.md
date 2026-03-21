@@ -9,7 +9,7 @@ A backend + frontend for booking individual seats at events, using a **two-phase
 - **User identity**: no authentication. Pass `X-User-ID: <uuid>` on every booking request. The `users` table contains seeded users whose IDs you can use.
 - **Seat selection**: users pick specific ticket IDs (pre-generated seats). One or more per reservation.
 - **Two-phase booking**: seats are held for 10 minutes (configurable) via a Redis lock while the user completes payment. The booking expires automatically if not confirmed within the TTL.
-- **Performers & venues**: pre-seeded. Events are created via SQL seed; there is no admin API.
+- **Venues**: pre-seeded. Events are created via SQL seed; there is no admin API.
 - **Payment**: out of scope — `paymentDetails` field is accepted but not processed.
 
 ---
@@ -98,12 +98,12 @@ docker compose up -d
 chmod +x migrations/migrate.sh
 ./migrations/migrate.sh
 
-# 5. Start the backend
+# 5. Start the backend (run from project root)
 go run ./cmd/server
 
 # 6. Open the frontend
-open frontend/index.html
-# No build step needed — open directly in any browser
+# The server serves the app at http://localhost:8085/
+open http://localhost:8085/
 ```
 
 ---
@@ -112,7 +112,8 @@ open frontend/index.html
 
 | Variable | Default | Description |
 |---|---|---|
-| `SERVER_PORT` | `8080` | HTTP server port |
+| `SERVER_PORT` | `8085` | HTTP server port |
+| `FRONTEND_DIR` | _(auto)_ | Optional absolute path to `frontend/`; if unset, the server searches upward from the current working directory for `frontend/index.html` |
 | `DATABASE_URL` | — | PostgreSQL connection string |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
 | `RESERVATION_TTL_MINUTES` | `10` | How long a seat reservation is held before expiry |
@@ -136,20 +137,9 @@ Seeded user IDs:
 ### List events
 ```bash
 curl http://localhost:8080/events
-curl "http://localhost:8080/events?keyword=jazz&page=1&pageSize=10"
-curl "http://localhost:8080/events?start=2026-01-01T00:00:00Z&end=2026-12-31T23:59:59Z"
 ```
 
-Response includes `availableCount` (remaining capacity from `events.capacity` minus active bookings).
-
-### Get single event
-```bash
-curl http://localhost:8080/events/30000000-0000-0000-0000-000000000001
-```
-
-Returns the same shape as list items (venue, performer, `availableCount`, etc.).
-
----
+Response includes `availableCount` (remaining capacity from `venue.capacity` minus active bookings).
 
 ### Step 1 — Reserve seats (hold for 10 min)
 ```bash

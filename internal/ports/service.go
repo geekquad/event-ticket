@@ -7,8 +7,7 @@ import (
 )
 
 type EventService interface {
-	GetEvent(ctx context.Context, eventID string) (*entities.Event, error)
-	ListEvents(ctx context.Context, params EventSearchParams) ([]entities.Event, int, error)
+	ListEvents(ctx context.Context) ([]entities.Event, error)
 }
 
 type BookingService interface {

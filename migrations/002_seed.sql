@@ -4,37 +4,26 @@ INSERT INTO users (name, email) VALUES
     ('Bob',   'bob@example.com'),
     ('Carol', 'carol@example.com');
 
--- Sample performers
-INSERT INTO performers (name, description) VALUES
-    ('The Rolling Bands', 'Classic rock legends on a world tour'),
-    ('DJ Sparks',         'Electronic music producer and live performer');
-
 -- Sample venues
 INSERT INTO venues (name, address, capacity) VALUES
-    ('Madison Square Garden', '4 Penn Plaza, New York, NY 10001', 20000),
-    ('The Jazz Cellar',       '10 W Village St, New York, NY 10014', 50);
+    ('Madison Square Garden', '4 Penn Plaza, New York, NY 10001', 100),
+    ('The Jazz Cellar',       '10 W Village St, New York, NY 10014', 5);
 
--- Sample events (link venues / performers by name)
-INSERT INTO events (name, description, date_time, venue_id, performer_id, capacity)
+-- Sample events (capacity comes from venue)
+INSERT INTO events (name, description, date_time, venue_id)
 SELECT
     'Rock Night 2026',
     'An epic one-night rock concert with pyrotechnics and special guests.',
     '2026-06-15 20:00:00+00'::timestamptz,
-    v.id,
-    p.id,
-    100
+    v.id
 FROM venues v
-JOIN performers p ON p.name = 'The Rolling Bands'
 WHERE v.name = 'Madison Square Garden';
 
-INSERT INTO events (name, description, date_time, venue_id, performer_id, capacity)
+INSERT INTO events (name, description, date_time, venue_id)
 SELECT
     'Intimate Jazz Evening',
     'A small-venue jazz night with limited capacity. Book fast.',
     '2026-07-04 19:00:00+00'::timestamptz,
-    v.id,
-    p.id,
-    5
+    v.id
 FROM venues v
-JOIN performers p ON p.name = 'DJ Sparks'
 WHERE v.name = 'The Jazz Cellar';

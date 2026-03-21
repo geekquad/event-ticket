@@ -145,20 +145,9 @@ Venue metadata plus optional `seat_map`.
 | seat_map | JSONB | optional |
 | created_at | TIMESTAMPTZ | |
 
-### `performers`
-
-Performer / artist metadata.
-
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | primary key |
-| name | VARCHAR | |
-| description | TEXT | |
-| created_at | TIMESTAMPTZ | |
-
 ### `events`
 
-The event row is the source of capacity for reservation checks.
+Capacity for reservation checks comes from the event's venue.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -167,8 +156,6 @@ The event row is the source of capacity for reservation checks.
 | description | TEXT | |
 | date_time | TIMESTAMPTZ | event time |
 | venue_id | UUID | FK → `venues` |
-| performer_id | UUID | FK → `performers` |
-| capacity | INT | total reservable capacity |
 | created_at | TIMESTAMPTZ | |
 
 Index:
@@ -239,22 +226,20 @@ Entities live in `internal/entities` and are simple transport types shared acros
 
 ```go
 type Event struct {
-    ID             string
-    Name           string
-    Description    string
-    DateTime       time.Time
-    Venue          Venue
-    Performer      Performer
-    Capacity       int
-    AvailableCount int
-    CreatedAt      time.Time
+    ID              string
+    Name            string
+    Description     string
+    DateTime        time.Time
+    Venue           Venue
+    AvailableCount  int
+    CreatedAt       time.Time
 }
 ```
 
-`AvailableCount` is computed in SQL as:
+Capacity comes from `Venue.Capacity`. `AvailableCount` is computed in SQL as:
 
 ```sql
-e.capacity - COALESCE(SUM(b.quantity), 0)
+v.capacity - COALESCE(SUM(b.quantity), 0)
 ```
 
 where the sum only includes:
@@ -300,7 +285,7 @@ type AuditLog struct {
 
 Although `AuditLog` has an `ID` field, the repository insert does not send it. PostgreSQL generates the primary key.
 
-### `User`, `Venue`, `Performer`
+### `User`, `Venue`
 
 These remain straightforward data holders with no special behavior.
 
@@ -326,8 +311,7 @@ var (
 #### `EventRepository`
 
 ```text
-GetByID(ctx, id)
-List(ctx, params)
+List(ctx)
 LockEventCapacity(ctx, eventID)
 ```
 
@@ -412,7 +396,6 @@ It depends on:
 
 `EventService` is thin:
 
-- `GetEvent` delegates to `eventRepo.GetByID`
 - `ListEvents` delegates to `eventRepo.List`
 
 #### `UserService`
@@ -427,7 +410,6 @@ PostgreSQL is the durable system of record for:
 
 - users
 - venues
-- performers
 - events
 - bookings
 - audit logs
@@ -441,10 +423,10 @@ Booking semantics in PostgreSQL:
 
 ### Available count query
 
-Both `GetByID` and `List` in `event_repo.go` compute availability like this:
+`List` in `event_repo.go` computes availability like this:
 
 ```sql
-e.capacity - COALESCE((
+v.capacity - COALESCE((
     SELECT SUM(b.quantity)
     FROM bookings b
     WHERE b.event_id = e.id
@@ -454,6 +436,8 @@ e.capacity - COALESCE((
       )
 ), 0)
 ```
+
+(where `v` is the venue joined to the event)
 
 This is the definition of “available”.
 
@@ -501,7 +485,7 @@ Redis does not store:
 
 - the durable reservation record,
 - final booking status,
-- event capacity,
+- venue capacity,
 - audit history.
 
 If the lock expires, Redis silently drops the key. The durable cleanup of the matching booking row happens lazily on later requests via `CancelExpiredReservations()`.
@@ -516,17 +500,16 @@ If the lock expires, Redis silently drops the key. The durable cleanup of the ma
 
 1. Normalize `quantity` to at least `1`.
 2. Run lazy cleanup of expired reservations.
-3. Start a DB transaction.
-4. Inside the transaction:
+3. Generate a booking ID and acquire the Redis lock on `reservation:{eventID}:{userID}`.
+4. If Redis acquisition fails or the key already exists, return (no DB work).
+5. Start a DB transaction. On any failure, release the Redis lock and return.
+6. Inside the transaction:
    - clean up expired reservations again,
    - lock the event row with `FOR UPDATE`,
    - sum currently allocated quantity,
    - reject if remaining capacity is insufficient,
    - reject if the same user already has an active `RESERVED` booking for the event,
-   - insert a new booking row,
-   - receive the DB-generated booking ID via `RETURNING id`.
-5. After the transaction commits, acquire the Redis lock on `reservation:{eventID}:{userID}`.
-6. If Redis acquisition fails, immediately mark the booking as `CANCELLED`.
+   - insert a new booking row with the pre-generated ID.
 7. Write the audit row.
 
 ### Confirm
@@ -569,13 +552,15 @@ If the lock expires, Redis silently drops the key. The durable cleanup of the ma
 
 ### Capacity race protection
 
-The critical race during reserve is protected by locking the event row:
+The critical race during reserve is protected by:
+
+1. **Redis lock first** — Acquiring the lock on `reservation:{eventID}:{userID}` before the DB transaction serializes same-user concurrent reservations for the same event. A second request from the same user fails at Redis and never touches the DB.
+
+2. **Event row lock** — Inside the transaction, locking the event row with `FOR UPDATE` serializes capacity checks and booking inserts across all users:
 
 ```sql
 SELECT capacity FROM events WHERE id = $1 FOR UPDATE
 ```
-
-This serializes concurrent reserve attempts for the same event while capacity is checked and the booking row is inserted.
 
 ### Confirm race protection
 
@@ -609,9 +594,11 @@ This means:
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| GET | `/` | serve frontend (index.html) |
+| GET | `/styles.css` | frontend styles |
+| GET | `/app.js` | frontend script |
 | GET | `/health` | health check |
 | GET | `/events` | list events |
-| GET | `/events/:eventId` | fetch one event |
 | POST | `/booking/reserve` | reserve quantity for an event |
 | POST | `/booking/confirm` | confirm a booking |
 | DELETE | `/booking/:bookingId` | cancel a booking |
@@ -640,11 +627,13 @@ default              -> 500
 
 ### Frontend
 
-The frontend consists of three files:
+The server serves the frontend at `GET /`. Static assets:
 
-- `frontend/index.html` for markup
-- `frontend/styles.css` for styles
-- `frontend/app.js` for behavior
+- `GET /` → `index.html`
+- `GET /styles.css` → styles
+- `GET /app.js` → script
+
+Source files live in `frontend/`. At startup the server walks up from the process working directory until it finds `frontend/index.html`, so `go run .` works from the repo root or from `cmd/server`. Set `FRONTEND_DIR` to an absolute path to override.
 
 The UI supports:
 
@@ -655,11 +644,7 @@ The UI supports:
 - confirming or cancelling bookings,
 - showing countdowns for reserved bookings.
 
-The browser talks directly to the API using:
-
-```js
-const API = `http://${window.location.hostname}:8085`
-```
+When served from the same origin, the frontend uses `window.location.origin` for API calls.
 
 ---
 
@@ -717,6 +702,6 @@ The implementation assumes one Redis instance. There is no distributed multi-nod
 
 The authoritative availability model is:
 
-- event capacity
+- venue capacity (from the event's venue)
 - minus confirmed quantity
 - minus non-expired reserved quantity

@@ -24,6 +24,18 @@ func (r *bookingRepo) exec(ctx context.Context) executor {
 }
 
 func (r *bookingRepo) Create(ctx context.Context, booking *entities.Booking) error {
+	if booking.ID != "" {
+		_, err := r.exec(ctx).ExecContext(ctx,
+			`INSERT INTO bookings (id, user_id, event_id, quantity, status, expires_at, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			booking.ID, booking.UserID, booking.EventID, booking.Quantity,
+			booking.Status, booking.ExpiresAt, booking.CreatedAt, booking.UpdatedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("insert booking: %w", err)
+		}
+		return nil
+	}
 	err := r.exec(ctx).QueryRowContext(ctx,
 		`INSERT INTO bookings (user_id, event_id, quantity, status, expires_at, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -34,7 +46,6 @@ func (r *bookingRepo) Create(ctx context.Context, booking *entities.Booking) err
 	if err != nil {
 		return fmt.Errorf("insert booking: %w", err)
 	}
-
 	return nil
 }
 

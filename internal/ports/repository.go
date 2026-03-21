@@ -2,23 +2,13 @@ package ports
 
 import (
 	"context"
-	"time"
 
 	"ticket/internal/entities"
 )
 
-type EventSearchParams struct {
-	Keyword   string
-	StartDate *time.Time
-	EndDate   *time.Time
-	Page      int
-	PageSize  int
-}
-
 type EventRepository interface {
-	GetByID(ctx context.Context, id string) (*entities.Event, error)
-	List(ctx context.Context, params EventSearchParams) ([]entities.Event, int, error)
-	// LockEventCapacity locks the event row and returns venue capacity for headcount checks.
+	List(ctx context.Context) ([]entities.Event, error)
+	// LockEventCapacity locks the event row and returns the venue's capacity for headcount checks.
 	LockEventCapacity(ctx context.Context, eventID string) (capacity int, err error)
 }
 

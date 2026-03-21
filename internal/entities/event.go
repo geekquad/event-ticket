@@ -6,15 +6,14 @@ import (
 )
 
 type Event struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Description    string    `json:"description"`
-	DateTime       time.Time `json:"dateTime"`
-	Venue          Venue     `json:"venue"`
-	Performer      Performer `json:"performer"`
-	Capacity       int       `json:"capacity"`
-	AvailableCount int       `json:"availableCount"`
-	CreatedAt      time.Time `json:"createdAt"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Description     string    `json:"description"`
+	DateTime        time.Time `json:"dateTime"`
+	Venue Venue `json:"venue"`
+	// AvailableCount is computed when listing events (venue capacity minus active bookings); it is not a DB column.
+	AvailableCount int `json:"availableCount"`
+	CreatedAt       time.Time `json:"createdAt"`
 }
 
 type Venue struct {
@@ -26,9 +25,7 @@ type Venue struct {
 	CreatedAt time.Time        `json:"createdAt"`
 }
 
-type Performer struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	CreatedAt   time.Time `json:"createdAt"`
-}
+
+
+
+

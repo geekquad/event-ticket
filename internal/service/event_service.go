@@ -17,10 +17,6 @@ func NewEventService(eventRepo ports.EventRepository) ports.EventService {
 	}
 }
 
-func (s *eventService) GetEvent(ctx context.Context, eventID string) (*entities.Event, error) {
-	return s.eventRepo.GetByID(ctx, eventID)
-}
-
-func (s *eventService) ListEvents(ctx context.Context, params ports.EventSearchParams) ([]entities.Event, int, error) {
-	return s.eventRepo.List(ctx, params)
+func (s *eventService) ListEvents(ctx context.Context) ([]entities.Event, error) {
+	return s.eventRepo.List(ctx)
 }

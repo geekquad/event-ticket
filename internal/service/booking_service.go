@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
+
 	"ticket/internal/entities"
 	"ticket/internal/ports"
 )
@@ -58,8 +60,30 @@ func (s *bookingService) Reserve(ctx context.Context, userID, eventID string, qu
 		slog.Warn("failed to cleanup expired reservations", "error", err)
 	}
 
-	var booking *entities.Booking
+	bookingID := uuid.New().String()
+	lockKey := reservationLockKey(eventID, userID)
+	lockVal := reservationLockValue(userID, quantity, bookingID)
 
+	ok, lockErr := s.lockManager.Acquire(ctx, lockKey, lockVal, s.reservationTTL)
+	if lockErr != nil {
+		s.writeAudit(ctx, entities.AuditActionBookingCreated, entities.AuditOutcomeFailure,
+			"", userID, intPtr(quantity), map[string]any{"reason": lockErr.Error(), "eventId": eventID})
+		return nil, fmt.Errorf("acquire reservation lock: %w", lockErr)
+	}
+	if !ok {
+		s.writeAudit(ctx, entities.AuditActionBookingCreated, entities.AuditOutcomeFailure,
+			"", userID, intPtr(quantity), map[string]any{"reason": "reservation lock already held", "eventId": eventID})
+		return nil, entities.ErrConflict
+	}
+
+	lockAcquired := true
+	defer func() {
+		if lockAcquired {
+			_ = s.lockManager.Release(ctx, lockKey, lockVal)
+		}
+	}()
+
+	var booking *entities.Booking
 	txErr := s.transactor.WithTransaction(ctx, func(txCtx context.Context) error {
 		if err := s.bookingRepo.CancelExpiredReservations(txCtx); err != nil {
 			return err
@@ -94,6 +118,7 @@ func (s *bookingService) Reserve(ctx context.Context, userID, eventID string, qu
 		now := time.Now()
 		expiresAt := now.Add(s.reservationTTL)
 		b := &entities.Booking{
+			ID:         bookingID,
 			UserID:     userID,
 			EventID:    eventID,
 			Quantity:   quantity,
@@ -116,27 +141,7 @@ func (s *bookingService) Reserve(ctx context.Context, userID, eventID string, qu
 		return nil, txErr
 	}
 
-	lockKey := reservationLockKey(eventID, userID)
-	lockVal := reservationLockValue(userID, quantity, booking.ID)
-
-	ok, lockErr := s.lockManager.Acquire(ctx, lockKey, lockVal, s.reservationTTL)
-	if lockErr != nil {
-		if cancelErr := s.bookingRepo.UpdateStatus(ctx, booking.ID, entities.BookingStatusCancelled); cancelErr != nil {
-			slog.Error("failed to cancel booking after redis error", "bookingId", booking.ID, "error", cancelErr)
-		}
-		s.writeAudit(ctx, entities.AuditActionBookingCreated, entities.AuditOutcomeFailure,
-			booking.ID, userID, intPtr(quantity), map[string]any{"reason": lockErr.Error(), "eventId": eventID})
-		return nil, fmt.Errorf("acquire reservation lock: %w", lockErr)
-	}
-	if !ok {
-		if cancelErr := s.bookingRepo.UpdateStatus(ctx, booking.ID, entities.BookingStatusCancelled); cancelErr != nil {
-			slog.Error("failed to cancel booking after lock contention", "bookingId", booking.ID, "error", cancelErr)
-		}
-		s.writeAudit(ctx, entities.AuditActionBookingCreated, entities.AuditOutcomeFailure,
-			booking.ID, userID, intPtr(quantity), map[string]any{"reason": "reservation lock already held", "eventId": eventID})
-		return nil, entities.ErrConflict
-	}
-
+	lockAcquired = false
 	s.writeAudit(ctx, entities.AuditActionBookingCreated, entities.AuditOutcomeSuccess,
 		booking.ID, userID, intPtr(quantity), map[string]any{
 			"bookingId": booking.ID,

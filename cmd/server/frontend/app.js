@@ -1,5 +1,5 @@
-// Same hostname as the page so the browser origin matches the API host.
-const API = `http://${window.location.hostname}:8085`;
+// Use same origin when served from API server; fallback for direct file open.
+const API = window.location.origin || `http://${window.location.hostname}:8085`;
 
   // ── State ──────────────────────────────────────────────────────────────────
   let currentUserID = localStorage.getItem('userId') || '';
@@ -109,9 +109,10 @@ const API = `http://${window.location.hostname}:8085`;
   }
 
   function buildEventCard(ev) {
+    const capacity  = ev.venue?.capacity ?? 0;
     const isSoldOut = ev.availableCount === 0;
-    const booked    = ev.capacity - ev.availableCount;
-    const pct       = ev.capacity > 0 ? Math.round((booked / ev.capacity) * 100) : 0;
+    const booked    = capacity - ev.availableCount;
+    const pct       = capacity > 0 ? Math.round((booked / capacity) * 100) : 0;
     const fillClass = pct >= 100 ? 'full' : pct >= 75 ? 'warn' : '';
     const date      = new Date(ev.dateTime).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
@@ -120,13 +121,13 @@ const API = `http://${window.location.hostname}:8085`;
     card.innerHTML = `
       <h3>${escHtml(ev.name)}</h3>
       <p class="meta">📅 ${date}</p>
-      <p class="venue">📍 ${escHtml(ev.venue?.name || '')} &nbsp;·&nbsp; 🎤 ${escHtml(ev.performer?.name || '')}</p>
+      <p class="venue">📍 ${escHtml(ev.venue?.name || '')}</p>
       <div class="capacity-label">
         <span>${isSoldOut
           ? '<span class="badge-sold-out">Sold out</span>'
           : `${ev.availableCount} seat${ev.availableCount !== 1 ? 's' : ''} available`
         }</span>
-        <span>${booked} / ${ev.capacity} booked</span>
+        <span>${booked} / ${capacity} booked</span>
       </div>
       <div class="capacity-bar">
         <div class="capacity-bar-fill ${fillClass}" style="width:${pct}%"></div>
@@ -153,7 +154,7 @@ const API = `http://${window.location.hostname}:8085`;
       const inc = document.createElement('button');
       inc.textContent = '+';
       inc.onclick = () => {
-        if (quantity < ev.availableCount) { quantity++; qtySpan.textContent = quantity; }
+        if (quantity < (ev.availableCount ?? 0)) { quantity++; qtySpan.textContent = quantity; }
       };
 
       stepper.appendChild(dec);

@@ -1,29 +1,10 @@
 package main
 
 import (
-	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
-
-func RequestLogger() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		start := time.Now()
-		path := c.Request.URL.Path
-		method := c.Request.Method
-
-		c.Next()
-
-		slog.Info("request completed",
-			"method", method,
-			"path", path,
-			"status", c.Writer.Status(),
-			"latency", time.Since(start).String(),
-		)
-	}
-}
 
 func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {

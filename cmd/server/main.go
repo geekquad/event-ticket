@@ -12,10 +12,7 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"ticket/internal/adapters/postgres"
-	redisadapter "ticket/internal/adapters/redis"
 	"ticket/internal/config"
-	"ticket/internal/service"
 )
 
 // loadDotEnv loads the first .env found walking up from the working directory
@@ -52,43 +49,18 @@ func main() {
 	slog.SetDefault(logger)
 
 	loadDotEnv()
-
 	cfg := config.Load()
 
-	db, err := postgres.Connect(cfg.DatabaseURL)
+	container, err := NewContainer(cfg)
 	if err != nil {
-		slog.Error("failed to connect to database", "error", err)
+		slog.Error("failed to initialize", "error", err)
 		os.Exit(1)
 	}
-	defer db.Close()
-	slog.Info("connected to database")
-
-	redisClient, err := redisadapter.Connect(cfg.RedisURL)
-	if err != nil {
-		slog.Error("failed to connect to redis", "error", err)
-		os.Exit(1)
-	}
-	defer redisClient.Close()
-	slog.Info("connected to redis")
-
-	// Repositories
-	eventRepo := postgres.NewEventRepo(db)
-	bookingRepo := postgres.NewBookingRepo(db)
-	auditRepo := postgres.NewAuditRepo(db)
-	userRepo := postgres.NewUserRepo(db)
-	transactor := postgres.NewTransactor(db)
-	lockManager := redisadapter.NewLockManager(redisClient)
-
-	// Services
-	eventService := service.NewEventService(eventRepo)
-	bookingService := service.NewBookingService(bookingRepo, eventRepo, auditRepo, lockManager, transactor, cfg.ReservationTTL)
-	userService := service.NewUserService(userRepo)
-
-	router := NewRouter(eventService, bookingService, userService)
+	defer container.Close()
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.ServerPort,
-		Handler:           router,
+		Handler:           container.Router,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
