@@ -50,100 +50,14 @@ run_sql_file() {
   exit 1
 }
 
-run_sql_query() {
-  _query="$1"
-  if command -v psql >/dev/null 2>&1; then
-    psql "$DB_URL" -Atqc "$_query"
-    return
-  fi
-  if command -v docker >/dev/null 2>&1 && [ -f "$ROOT_DIR/docker-compose.yml" ]; then
-    cd "$ROOT_DIR"
-    docker compose exec -T postgres psql "$DB_URL_IN_CONTAINER" -Atqc "$_query"
-    return
-  fi
-  echo "psql not found and docker compose unavailable. Install PostgreSQL client tools or start Docker." >&2
-  exit 1
-}
-
-mark_applied() {
-  _name="$1"
-  run_sql_query "INSERT INTO schema_migrations (name) VALUES ('$_name') ON CONFLICT (name) DO NOTHING;"
-}
-
-is_applied() {
-  _name="$1"
-  _result="$(run_sql_query "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = '$_name');")"
-  [ "$_result" = "t" ]
-}
-
-table_exists() {
-  _table="$1"
-  _result="$(run_sql_query "SELECT EXISTS (
-    SELECT 1
-    FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name = '$_table'
-  );")"
-  [ "$_result" = "t" ]
-}
-
-column_exists() {
-  _table="$1"
-  _column="$2"
-  _result="$(run_sql_query "SELECT EXISTS (
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = '$_table' AND column_name = '$_column'
-  );")"
-  [ "$_result" = "t" ]
-}
-
-ensure_migrations_table() {
-  run_sql_query "
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      name VARCHAR(255) PRIMARY KEY,
-      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  " >/dev/null
-}
-
-baseline_existing_database() {
-  if table_exists "users"; then
-    mark_applied "001_init.sql"
-    mark_applied "002_seed.sql"
-  fi
-
-  if column_exists "bookings" "quantity"; then
-    mark_applied "003_booking_quantity.sql"
-  fi
-
-  if column_exists "audit_logs" "quantity"; then
-    mark_applied "004_audit_quantity.sql"
-  fi
-
-  if ! table_exists "booking_tickets" &&
-     ! column_exists "tickets" "status" &&
-     ! column_exists "tickets" "booking_id"; then
-    mark_applied "005_drop_legacy_ticket_booking_schema.sql"
-  fi
-}
-
 ensure_compose_postgres
 
 echo "Running migrations against database..."
 
-ensure_migrations_table
-baseline_existing_database
-
 for f in "$SCRIPT_DIR"/*.sql; do
   [ -f "$f" ] || continue
-  name="$(basename "$f")"
-  if is_applied "$name"; then
-    echo "  Skipping $name (already applied)"
-    continue
-  fi
-  echo "  Applying $name..."
+  echo "  Applying $(basename "$f")..."
   run_sql_file "$f"
-  mark_applied "$name"
 done
 
 echo "Migrations complete."

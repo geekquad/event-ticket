@@ -109,10 +109,7 @@ event-ticket/
 │
 ├── migrations/
 │   ├── 001_init.sql
-│   ├── 002_seed.sql
-│   ├── 003_booking_quantity.sql
-│   ├── 004_audit_quantity.sql
-│   └── 005_drop_legacy_ticket_booking_schema.sql
+│   └── 002_seed.sql
 │
 └── frontend/
     ├── index.html
