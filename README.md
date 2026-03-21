@@ -36,7 +36,7 @@ frontend/            Single-file vanilla HTML/JS UI
 Client                            Server                       Redis          DB
   │                                  │                           │             │
   │── POST /booking/reserve ────────▶│                           │             │
-  │   {ticketIds: [...]}             │── SET NX EX 600 ─────────▶│ (per ticket)│
+  │   {eventId, quantity}            │── SET NX EX 600 ─────────▶│ event:user  │
   │                                  │   (acquire lock)           │             │
   │                                  │── INSERT booking RESERVED ─────────────▶│
   │◀─ 201 {bookingId, status:RESERVED}│                           │             │
@@ -45,7 +45,6 @@ Client                            Server                       Redis          DB
   │                                  │                           │             │
   │── POST /booking/confirm ────────▶│                           │             │
   │   {bookingId}                    │── GET lock owner ─────────▶│             │
-  │                                  │── UPDATE tickets BOOKED ──────────────▶│
   │                                  │── UPDATE booking CONFIRMED────────────▶│
   │                                  │── DEL lock ───────────────▶│             │
   │◀─ 200 {status: CONFIRMED}        │                           │             │
@@ -141,14 +140,14 @@ curl "http://localhost:8080/events?keyword=jazz&page=1&pageSize=10"
 curl "http://localhost:8080/events?start=2026-01-01T00:00:00Z&end=2026-12-31T23:59:59Z"
 ```
 
-Response includes `availableCount` (live seat count derived from the tickets table).
+Response includes `availableCount` (remaining capacity from `events.capacity` minus active bookings).
 
-### Get event + ticket list
+### Get single event
 ```bash
 curl http://localhost:8080/events/30000000-0000-0000-0000-000000000001
 ```
 
-The single-event response includes a `tickets` array with each seat's ID, section, row, seatNumber, price, and status.
+Returns the same shape as list items (venue, performer, `availableCount`, etc.).
 
 ---
 
@@ -157,7 +156,7 @@ The single-event response includes a `tickets` array with each seat's ID, sectio
 curl -X POST http://localhost:8080/booking/reserve \
   -H "Content-Type: application/json" \
   -H "X-User-ID: 00000000-0000-0000-0000-000000000001" \
-  -d '{"ticketIds": ["<ticket-uuid-1>", "<ticket-uuid-2>"]}'
+  -d '{"eventId": "<event-uuid>", "quantity": 2}'
 ```
 
 Returns `201 Created`:
@@ -166,7 +165,7 @@ Returns `201 Created`:
   "id": "<booking-uuid>",
   "userId": "00000000-0000-0000-0000-000000000001",
   "eventId": "<event-uuid>",
-  "ticketIds": ["<ticket-uuid-1>", "<ticket-uuid-2>"],
+  "quantity": 2,
   "totalPrice": 300.00,
   "status": "RESERVED",
   "createdAt": "2026-03-21T10:00:00Z",
@@ -174,7 +173,7 @@ Returns `201 Created`:
 }
 ```
 
-Returns `409 Conflict` if any ticket is already reserved or booked.
+Returns `409 Conflict` if capacity is insufficient or the user already has an active reservation for the event.
 
 ### Step 2 — Confirm purchase (within 10 min)
 ```bash
@@ -194,7 +193,7 @@ curl -X DELETE http://localhost:8080/booking/<booking-uuid> \
   -H "X-User-ID: 00000000-0000-0000-0000-000000000001"
 ```
 
-Returns `204 No Content`. Confirmed-booking cancellation releases all ticket locks back to AVAILABLE immediately.
+Returns `204 No Content`. Cancelling a `RESERVED` booking releases the Redis reservation lock.
 
 ### My bookings
 ```bash
@@ -216,33 +215,26 @@ curl http://localhost:8080/health
 
 ---
 
-## Concurrency demo (seat contention)
+## Concurrency demo (capacity contention)
 
-The seeded *Intimate Jazz Evening* has only **5 tickets** (`FLOOR-1-1` through `FLOOR-1-5`). First, get the ticket IDs:
-
-```bash
-curl http://localhost:8080/events/30000000-0000-0000-0000-000000000002 \
-  | python3 -m json.tool | grep '"id"' | head -6
-```
-
-Then fire two concurrent reserve requests for the same ticket:
+Use two different users reserving the last remaining seats for the same event (e.g. *Intimate Jazz Evening*):
 
 ```bash
-TICKET="<floor-ticket-uuid>"
+EVENT="<event-uuid>"
 
 for i in 1 2; do
   curl -s -X POST http://localhost:8080/booking/reserve \
     -H "Content-Type: application/json" \
     -H "X-User-ID: 00000000-0000-0000-0000-00000000000${i}" \
-    -d "{\"ticketIds\": [\"$TICKET\"]}" &
+    -d "{\"eventId\": \"$EVENT\", \"quantity\": 5}" &
 done
 wait
 ```
 
-One request returns `201`, the other returns `409 Conflict`. Inspect the audit log:
+One request may return `201`, the other `409 Conflict` if capacity is exceeded. Inspect the audit log:
 
 ```sql
-SELECT action, outcome, metadata, created_at
+SELECT action, outcome, quantity, metadata, created_at
 FROM audit_logs
 ORDER BY created_at;
 ```

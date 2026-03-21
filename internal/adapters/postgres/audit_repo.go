@@ -20,13 +20,17 @@ func NewAuditRepo(db *sql.DB) ports.AuditRepository {
 }
 
 func (r *auditRepo) Log(ctx context.Context, entry *entities.AuditLog) error {
+	var qty sql.NullInt64
+	if entry.Quantity != nil {
+		qty = sql.NullInt64{Int64: int64(*entry.Quantity), Valid: true}
+	}
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO audit_logs
-		 (id, entity_type, entity_id, action, user_id, outcome, metadata, created_at)
+		 (entity_type, entity_id, action, user_id, outcome, quantity, metadata, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		entry.ID, entry.EntityType, entry.EntityID,
+		entry.EntityType, entry.EntityID,
 		entry.Action, entry.UserID, entry.Outcome,
-		entry.Metadata, entry.CreatedAt,
+		qty, entry.Metadata, entry.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert audit log: %w", err)

@@ -30,7 +30,7 @@ WHERE v.name = 'Madison Square Garden';
 INSERT INTO events (name, description, date_time, venue_id, performer_id, capacity)
 SELECT
     'Intimate Jazz Evening',
-    'A small-venue jazz night — only 5 spots available. Book fast.',
+    'A small-venue jazz night with limited capacity. Book fast.',
     '2026-07-04 19:00:00+00'::timestamptz,
     v.id,
     p.id,
@@ -38,37 +38,3 @@ SELECT
 FROM venues v
 JOIN performers p ON p.name = 'DJ Sparks'
 WHERE v.name = 'The Jazz Cellar';
-
--- ============================================================
--- Tickets for Rock Night 2026
--- 100 tickets: 5 sections (A-E), 4 rows each, 5 seats per row
--- Price: 150.00
--- ============================================================
-INSERT INTO tickets (event_id, seat_number, row, section, price)
-SELECT
-    e.id,
-    s.n::text,
-    r.n::text,
-    sec,
-    150.00
-FROM events e
-CROSS JOIN (VALUES ('A'), ('B'), ('C'), ('D'), ('E')) AS sections(sec)
-CROSS JOIN generate_series(1, 4) AS r(n)
-CROSS JOIN generate_series(1, 5) AS s(n)
-WHERE e.name = 'Rock Night 2026';
-
--- ============================================================
--- Tickets for Intimate Jazz Evening
--- 5 tickets: section FLOOR, row 1, seats 1-5
--- Price: 75.00
--- ============================================================
-INSERT INTO tickets (event_id, seat_number, row, section, price)
-SELECT
-    e.id,
-    n::text,
-    '1',
-    'FLOOR',
-    75.00
-FROM events e
-CROSS JOIN generate_series(1, 2) AS n
-WHERE e.name = 'Intimate Jazz Evening';

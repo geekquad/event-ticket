@@ -21,12 +21,13 @@ const (
 )
 
 type AuditLog struct {
-	ID         string          `json:"id"`
+	ID         string          `json:"id,omitempty"`
 	EntityType string          `json:"entityType"`
 	EntityID   string          `json:"entityId"`
 	Action     AuditAction     `json:"action"`
 	UserID     string          `json:"userId"`
 	Outcome    AuditOutcome    `json:"outcome"`
+	Quantity   *int            `json:"quantity,omitempty"` // seats reserved or booked, when applicable
 	Metadata   json.RawMessage `json:"metadata,omitempty"`
 	CreatedAt  time.Time       `json:"createdAt"`
 }

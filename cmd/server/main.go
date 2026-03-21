@@ -73,7 +73,6 @@ func main() {
 
 	// Repositories
 	eventRepo := postgres.NewEventRepo(db)
-	ticketRepo := postgres.NewTicketRepo(db)
 	bookingRepo := postgres.NewBookingRepo(db)
 	auditRepo := postgres.NewAuditRepo(db)
 	userRepo := postgres.NewUserRepo(db)
@@ -81,8 +80,8 @@ func main() {
 	lockManager := redisadapter.NewLockManager(redisClient)
 
 	// Services
-	eventService := service.NewEventService(eventRepo, ticketRepo)
-	bookingService := service.NewBookingService(bookingRepo, ticketRepo, auditRepo, lockManager, transactor, cfg.ReservationTTL)
+	eventService := service.NewEventService(eventRepo)
+	bookingService := service.NewBookingService(bookingRepo, eventRepo, auditRepo, lockManager, transactor, cfg.ReservationTTL)
 	userService := service.NewUserService(userRepo)
 
 	router := NewRouter(eventService, bookingService, userService)

@@ -8,30 +8,17 @@ import (
 )
 
 type eventService struct {
-	eventRepo  ports.EventRepository
-	ticketRepo ports.TicketRepository
+	eventRepo ports.EventRepository
 }
 
-func NewEventService(eventRepo ports.EventRepository, ticketRepo ports.TicketRepository) ports.EventService {
+func NewEventService(eventRepo ports.EventRepository) ports.EventService {
 	return &eventService{
-		eventRepo:  eventRepo,
-		ticketRepo: ticketRepo,
+		eventRepo: eventRepo,
 	}
 }
 
 func (s *eventService) GetEvent(ctx context.Context, eventID string) (*entities.Event, error) {
-	event, err := s.eventRepo.GetByID(ctx, eventID)
-	if err != nil {
-		return nil, err
-	}
-
-	tickets, err := s.ticketRepo.GetByEventID(ctx, eventID)
-	if err != nil {
-		return nil, err
-	}
-	event.Tickets = tickets
-
-	return event, nil
+	return s.eventRepo.GetByID(ctx, eventID)
 }
 
 func (s *eventService) ListEvents(ctx context.Context, params ports.EventSearchParams) ([]entities.Event, int, error) {

@@ -14,17 +14,16 @@ type Event struct {
 	Performer      Performer `json:"performer"`
 	Capacity       int       `json:"capacity"`
 	AvailableCount int       `json:"availableCount"`
-	Tickets        []Ticket  `json:"tickets,omitempty"`
 	CreatedAt      time.Time `json:"createdAt"`
 }
 
 type Venue struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Address   string          `json:"address"`
-	Capacity  int             `json:"capacity"`
+	ID        string           `json:"id"`
+	Name      string           `json:"name"`
+	Address   string           `json:"address"`
+	Capacity  int              `json:"capacity"`
 	SeatMap   *json.RawMessage `json:"seatMap,omitempty"`
-	CreatedAt time.Time       `json:"createdAt"`
+	CreatedAt time.Time        `json:"createdAt"`
 }
 
 type Performer struct {

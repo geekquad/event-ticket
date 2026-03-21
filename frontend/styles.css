@@ -1,0 +1,247 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #1a1a2e;
+      color: #fff;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 700; }
+
+    .user-selector { display: flex; align-items: center; gap: 0.5rem; }
+    .user-selector label { font-size: 0.875rem; color: #ccc; }
+    .user-selector select {
+      padding: 0.35rem 0.6rem;
+      border-radius: 6px;
+      border: none;
+      font-size: 0.875rem;
+      background: #fff;
+      cursor: pointer;
+    }
+
+    nav {
+      background: #fff;
+      border-bottom: 1px solid #e0e0e0;
+      display: flex;
+    }
+    nav button {
+      padding: 0.75rem 1.5rem;
+      border: none;
+      background: none;
+      cursor: pointer;
+      font-size: 0.9rem;
+      border-bottom: 3px solid transparent;
+      color: #555;
+    }
+    nav button.active {
+      border-bottom-color: #1a1a2e;
+      color: #1a1a2e;
+      font-weight: 600;
+    }
+
+    main { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+
+    .page { display: none; }
+    .page.active { display: block; }
+
+    h2 { font-size: 1.2rem; margin-bottom: 1rem; color: #333; }
+
+    /* ── Event cards ─────────────────────────────────────────────────────────── */
+    .events-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+    .event-card {
+      background: #fff;
+      border-radius: 10px;
+      padding: 1.25rem;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .event-card h3 { font-size: 1rem; font-weight: 700; }
+    .event-card .meta { font-size: 0.8rem; color: #666; }
+    .event-card .venue { font-size: 0.8rem; color: #888; }
+
+    .capacity-bar {
+      height: 6px;
+      background: #e0e0e0;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 0.25rem;
+    }
+    .capacity-bar-fill {
+      height: 100%;
+      background: #4caf50;
+      border-radius: 3px;
+      transition: width 0.3s;
+    }
+    .capacity-bar-fill.warn { background: #ff9800; }
+    .capacity-bar-fill.full { background: #f44336; }
+    .capacity-label {
+      font-size: 0.78rem;
+      color: #555;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    /* Quantity stepper + reserve row */
+    .reserve-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: auto;
+    }
+    .qty-stepper {
+      display: flex;
+      align-items: center;
+      border: 1.5px solid #ddd;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .qty-stepper button {
+      width: 28px;
+      height: 28px;
+      border: none;
+      background: #f5f5f5;
+      font-size: 1rem;
+      cursor: pointer;
+      line-height: 1;
+      color: #333;
+    }
+    .qty-stepper button:hover { background: #e8e8e8; }
+    .qty-stepper span {
+      width: 28px;
+      text-align: center;
+      font-size: 0.875rem;
+      font-weight: 600;
+      user-select: none;
+    }
+
+    /* ── Buttons ─────────────────────────────────────────────────────────────── */
+    .btn {
+      flex: 1;
+      padding: 0.5rem 1rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      cursor: pointer;
+      font-weight: 600;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary  { background: #1a1a2e; color: #fff; }
+    .btn-primary:hover:not(:disabled)  { background: #2d2d5e; }
+    .btn-success  { background: #388e3c; color: #fff; }
+    .btn-success:hover:not(:disabled)  { background: #2e7d32; }
+    .btn-danger   { background: #f44336; color: #fff; }
+    .btn-danger:hover:not(:disabled)   { background: #c62828; }
+    .btn-outline  { background: transparent; color: #1a1a2e; border: 1.5px solid #1a1a2e; }
+    .btn-outline:hover:not(:disabled)  { background: #f0f0f8; }
+    .btn-sm { padding: 0.3rem 0.7rem; font-size: 0.8rem; flex: unset; }
+
+    .badge-sold-out {
+      display: inline-block;
+      background: #f44336;
+      color: #fff;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* ── Toast ───────────────────────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      padding: 0.75rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: #fff;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+      z-index: 999;
+      max-width: 320px;
+    }
+    #toast.show { opacity: 1; }
+    #toast.success { background: #388e3c; }
+    #toast.error   { background: #d32f2f; }
+
+    /* ── Bookings list ───────────────────────────────────────────────────────── */
+    .booking-list { display: flex; flex-direction: column; gap: 0.75rem; }
+    .booking-item {
+      background: #fff;
+      border-radius: 10px;
+      padding: 1.1rem 1.25rem;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 1rem;
+    }
+    .booking-item.reserved  { border-left: 4px solid #ff9800; }
+    .booking-item.confirmed { border-left: 4px solid #4caf50; }
+
+    .booking-item .info h3 { font-size: 0.95rem; font-weight: 600; }
+    .booking-item .info p  { font-size: 0.8rem; color: #777; margin-top: 0.2rem; }
+    .booking-item .info .booking-id { font-size: 0.75rem; color: #aaa; margin-top: 0.15rem; font-family: monospace; }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .badge-reserved-label  { background: #fff3e0; color: #e65100; }
+    .badge-confirmed-label { background: #e8f5e9; color: #1b5e20; }
+
+    .countdown {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #e65100;
+      margin-top: 0.3rem;
+    }
+    .countdown.urgent  { color: #d32f2f; }
+    .countdown.expired { color: #999; }
+
+    .booking-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      align-items: flex-end;
+      flex-shrink: 0;
+    }
+
+    .empty-state { color: #999; font-size: 0.9rem; text-align: center; padding: 3rem 0; }
+
+    .spinner {
+      border: 3px solid #e0e0e0;
+      border-top-color: #1a1a2e;
+      border-radius: 50%;
+      width: 28px; height: 28px;
+      animation: spin 0.7s linear infinite;
+      margin: 2rem auto;
+    }
