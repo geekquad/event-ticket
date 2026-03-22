@@ -83,36 +83,6 @@ Confirm uses `GET` through `GetOwner()` and compares the exact value.
 
 ---
 
-## Repository Ports
-
-### `EventRepository`
-
-- `List`
-- `TryAddReservedSlots`
-- `TransferReservedToBooked`
-- `ReleaseReservedSlots`
-- `ReleaseBookedSlots`
-
-### `BookingRepository`
-
-- `Create`
-- `GetByID`
-- `GetByUserID`
-- `UpdateStatus`
-- `ConfirmReservation`
-- `CancelExpiredReservations`
-- `CancelReservationIfExpired`
-- `HasActiveReservedBookingForUserEvent`
-
-### Other ports
-
-- `AuditRepository.Log`
-- `UserRepository.List`
-- `Transactor.WithTransaction`
-- `LockManager.Acquire / Release / GetOwner`
-
----
-
 ## Transaction Model
 
 `internal/infra/postgres/tx.go` stores `*sql.Tx` in the request context. Repository methods call `execFromContext()` and transparently use either:
