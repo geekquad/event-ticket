@@ -65,6 +65,6 @@ docker compose up --build
 
 ## Further Reading
 
+- [design.md](design.md) — assumptions, trade-offs, edge cases, scaling, concurrency, cancel/return, and audit logging
 - [ARCHITECTURE.md](ARCHITECTURE.md) — packages, routes, schema, ports, transactions, Redis/Lua snippets, HTTP errors
-- [design.md](design.md) — why it works, assumptions, trade-offs, edge cases, scaling
 - [reservelogic.md](reservelogic.md) — detailed reserve, confirm, cancel, expiry, and scaling walkthrough
