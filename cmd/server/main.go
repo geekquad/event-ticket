@@ -35,7 +35,10 @@ func loadDotEnv() {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			slog.Warn("no .env file found (using defaults from env or config)")
+			// In Docker / most platforms, env is injected; a .env file is optional.
+			if _, err := os.Stat("/.dockerenv"); err != nil {
+				slog.Info("no .env file on disk; using environment variables and defaults")
+			}
 			return
 		}
 		dir = parent

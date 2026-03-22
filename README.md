@@ -12,6 +12,8 @@ The current model is event-level inventory, not seat-level assignment.
 
 ## How to run locally?
 
+Please create a .env file from the .env-examples.
+
 From the repo root:
 
 ```bash
