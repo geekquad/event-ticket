@@ -16,12 +16,13 @@ import (
 )
 
 type bookingService struct {
-	bookingRepo    ports.BookingRepository
-	eventRepo      ports.EventRepository
-	auditRepo      ports.AuditRepository
-	lockManager    ports.LockManager
-	transactor     ports.Transactor
-	reservationTTL time.Duration
+	bookingRepo            ports.BookingRepository
+	eventRepo              ports.EventRepository
+	auditRepo              ports.AuditRepository
+	lockManager            ports.LockManager
+	transactor             ports.Transactor
+	reservationTTL         time.Duration
+	maxSeatsPerReservation int
 }
 
 func NewBookingService(
@@ -31,14 +32,16 @@ func NewBookingService(
 	lockManager ports.LockManager,
 	transactor ports.Transactor,
 	reservationTTL time.Duration,
+	maxSeatsPerReservation int,
 ) ports.BookingService {
 	return &bookingService{
-		bookingRepo:    bookingRepo,
-		eventRepo:      eventRepo,
-		auditRepo:      auditRepo,
-		lockManager:    lockManager,
-		transactor:     transactor,
-		reservationTTL: reservationTTL,
+		bookingRepo:            bookingRepo,
+		eventRepo:              eventRepo,
+		auditRepo:              auditRepo,
+		lockManager:            lockManager,
+		transactor:             transactor,
+		reservationTTL:         reservationTTL,
+		maxSeatsPerReservation: maxSeatsPerReservation,
 	}
 }
 
@@ -47,18 +50,26 @@ func reservationLockKey(eventID, userID string) string {
 	return "reservation:" + eventID + ":" + userID
 }
 
-func reservationLockValue(userID string, quantity int, bookingID string) string {
-	return userID + "|" + strconv.Itoa(quantity) + "|" + bookingID
+// reservationLockValue is the Redis string value; userID is only in the key (reservation:eventId:userId).
+func reservationLockValue(quantity int, bookingID string) string {
+	return strconv.Itoa(quantity) + "|" + bookingID
 }
 
 func (s *bookingService) Reserve(ctx context.Context, userID, eventID string, quantity int) (*entities.Booking, error) {
 	if quantity <= 0 {
 		quantity = 1
 	}
+	if quantity > s.maxSeatsPerReservation {
+		s.writeAudit(ctx, entities.AuditActionBookingCreated, entities.AuditOutcomeFailure,
+			"", userID, intPtr(quantity), map[string]any{
+				"reason": "quantity exceeds maximum per reservation", "eventId": eventID, "max": s.maxSeatsPerReservation,
+			})
+		return nil, entities.ErrInvalidQuantity
+	}
 
 	bookingID := uuid.New().String()
 	lockKey := reservationLockKey(eventID, userID)
-	lockVal := reservationLockValue(userID, quantity, bookingID)
+	lockVal := reservationLockValue(quantity, bookingID)
 
 	ok, lockErr := s.lockManager.Acquire(ctx, lockKey, lockVal, s.reservationTTL)
 	if lockErr != nil {
@@ -87,12 +98,15 @@ func (s *bookingService) Reserve(ctx context.Context, userID, eventID string, qu
 
 		ok, err := s.eventRepo.TryAddReservedSlots(txCtx, eventID, quantity)
 		if err != nil {
+			if errors.Is(err, entities.ErrInsufficientCapacity) {
+				s.writeAudit(txCtx, entities.AuditActionBookingCreated, entities.AuditOutcomeFailure,
+					"", userID, intPtr(quantity), map[string]any{"reason": "not enough available seats", "eventId": eventID})
+				return entities.ErrInsufficientCapacity
+			}
 			return err
 		}
 		if !ok {
-			s.writeAudit(txCtx, entities.AuditActionBookingCreated, entities.AuditOutcomeFailure,
-				"", userID, intPtr(quantity), map[string]any{"reason": "not enough available seats", "eventId": eventID})
-			return entities.ErrTicketUnavailable
+			return fmt.Errorf("try add reserved slots: unexpected outcome")
 		}
 
 		has, err := s.bookingRepo.HasActiveReservedBookingForUserEvent(txCtx, userID, eventID)
@@ -198,7 +212,7 @@ func (s *bookingService) Confirm(ctx context.Context, userID, bookingID string) 
 	}
 
 	lockKey := reservationLockKey(booking.EventID, userID)
-	wantVal := reservationLockValue(userID, booking.Quantity, bookingID)
+	wantVal := reservationLockValue(booking.Quantity, bookingID)
 	owner, lockErr := s.lockManager.GetOwner(ctx, lockKey)
 	if lockErr != nil {
 		return nil, fmt.Errorf("check lock owner: %w", lockErr)
@@ -307,7 +321,7 @@ func (s *bookingService) Cancel(ctx context.Context, userID, bookingID string) e
 
 	if wasReserved {
 		lockKey := reservationLockKey(booking.EventID, userID)
-		lockVal := reservationLockValue(userID, booking.Quantity, bookingID)
+		lockVal := reservationLockValue(booking.Quantity, bookingID)
 		if releaseErr := s.lockManager.Release(ctx, lockKey, lockVal); releaseErr != nil {
 			slog.Error("failed to release lock after cancel",
 				"bookingId", bookingID, "error", releaseErr)

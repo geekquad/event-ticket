@@ -35,10 +35,6 @@ func (h *BookingHandler) Reserve(c *gin.Context) {
 		return
 	}
 
-	if req.Quantity <= 0 {
-		req.Quantity = 1
-	}
-
 	booking, err := h.bookingService.Reserve(c.Request.Context(), userID, req.EventID, req.Quantity)
 	if err != nil {
 		handleError(c, err)

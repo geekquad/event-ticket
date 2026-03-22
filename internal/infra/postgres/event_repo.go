@@ -24,13 +24,13 @@ func (r *eventRepo) exec(ctx context.Context) executor {
 
 func (r *eventRepo) List(ctx context.Context) ([]entities.Event, error) {
 	rows, err := r.exec(ctx).QueryContext(ctx, `
-		SELECT
-			e.id, e.name, e.description, e.date_time,
-			GREATEST(v.capacity - e.booked_slots - e.reserved_slots, 0) AS available_count,
+		SELECT e.id, e.name, e.description, e.date_time,
+			GREATEST(v.capacity - e.booked_slots - e.reserved_slots, 0),
 			e.created_at,
 			v.id, v.name, v.address, v.capacity, v.seat_map, v.created_at
 		FROM events e
-		JOIN venues v ON e.venue_id = v.id
+		INNER JOIN venues v ON v.id = e.venue_id
+		WHERE e.date_time > NOW()
 		ORDER BY e.date_time ASC
 	`)
 	if err != nil {
@@ -60,32 +60,33 @@ func (r *eventRepo) List(ctx context.Context) ([]entities.Event, error) {
 }
 
 func (r *eventRepo) TryAddReservedSlots(ctx context.Context, eventID string, quantity int) (bool, error) {
-	res, err := r.exec(ctx).ExecContext(ctx, `
+	var updatedID string
+	err := r.exec(ctx).QueryRowContext(ctx, `
 		UPDATE events e
 		SET reserved_slots = e.reserved_slots + $2
 		FROM venues v
 		WHERE e.id = $1::uuid AND e.venue_id = v.id
 		  AND e.booked_slots + e.reserved_slots + $2 <= v.capacity
-	`, eventID, quantity)
-	if err != nil {
+		RETURNING e.id::text
+	`, eventID, quantity).Scan(&updatedID)
+	if err == nil {
+		return true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return false, fmt.Errorf("try add reserved slots: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("rows affected: %w", err)
+
+	var exists bool
+	if err := r.exec(ctx).QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM events WHERE id = $1::uuid)`,
+		eventID,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("lookup event: %w", err)
 	}
-	if n == 0 {
-		var dummy int
-		err := r.exec(ctx).QueryRowContext(ctx, `SELECT 1 FROM events WHERE id = $1::uuid`, eventID).Scan(&dummy)
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, entities.ErrNotFound
-		}
-		if err != nil {
-			return false, fmt.Errorf("lookup event: %w", err)
-		}
-		return false, nil
+	if !exists {
+		return false, entities.ErrNotFound
 	}
-	return true, nil
+	return false, entities.ErrInsufficientCapacity
 }
 
 func (r *eventRepo) TransferReservedToBooked(ctx context.Context, eventID string, quantity int) (bool, error) {

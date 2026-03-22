@@ -115,7 +115,11 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Conflict or no capacity (lock held, duplicate active reservation, or sold out)
+          description: |
+            Conflict or cannot complete reservation. `error` distinguishes cases:
+            - `insufficient capacity` — event exists but not enough seats for requested quantity.
+            - `conflict` — reservation lock already held or duplicate active reservation for this user/event.
+            Other booking flows may return `ticket unavailable` (e.g. confirm with expired lock).
           content:
             application/json:
               schema:

@@ -6,9 +6,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
-	"ticket/internal/adapters/postgres"
-	redisadapter "ticket/internal/adapters/redis"
 	"ticket/internal/config"
+	"ticket/internal/infra/postgres"
+	redisadapter "ticket/internal/infra/redis"
 	"ticket/internal/service"
 )
 
@@ -40,7 +40,8 @@ func NewContainer(cfg config.Config) (*Container, error) {
 	lockManager := redisadapter.NewLockManager(redisClient)
 
 	eventService := service.NewEventService(eventRepo)
-	bookingService := service.NewBookingService(bookingRepo, eventRepo, auditRepo, lockManager, transactor, cfg.ReservationTTL)
+	bookingService := service.NewBookingService(bookingRepo, eventRepo, auditRepo, lockManager, transactor,
+		cfg.ReservationTTL, cfg.MaxSeatsPerReservation)
 	userService := service.NewUserService(userRepo)
 
 	router := NewRouter(eventService, bookingService, userService, resolveFrontendDir())

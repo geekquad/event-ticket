@@ -142,9 +142,9 @@ func (r *bookingRepo) CancelExpiredReservations(ctx context.Context) error {
 			SELECT event_id, SUM(quantity) AS sub FROM expired GROUP BY event_id
 		)
 		UPDATE events e
-		SET reserved_slots = e.reserved_slots - a.sub
+		SET reserved_slots = GREATEST(e.reserved_slots - a.sub, 0)
 		FROM agg a
-		WHERE e.id = a.event_id AND e.reserved_slots >= a.sub
+		WHERE e.id = a.event_id
 	`)
 	if err != nil {
 		return fmt.Errorf("cancel expired reservations: %w", err)

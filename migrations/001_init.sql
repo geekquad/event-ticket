@@ -31,6 +31,9 @@ CREATE TABLE events (
 );
 
 CREATE INDEX idx_events_date_time ON events(date_time);
+CREATE INDEX idx_events_venue_id ON events(venue_id);
+-- One event start instant per venue (adjust or drop if you need matinees / overlapping slots).
+CREATE UNIQUE INDEX idx_events_venue_id_date_time ON events (venue_id, date_time);
 
 CREATE TABLE bookings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

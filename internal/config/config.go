@@ -7,10 +7,11 @@ import (
 )
 
 type Config struct {
-	ServerPort     string
-	DatabaseURL    string
-	RedisURL       string
-	ReservationTTL time.Duration
+	ServerPort             string
+	DatabaseURL            string
+	RedisURL               string
+	ReservationTTL         time.Duration
+	MaxSeatsPerReservation int
 }
 
 func Load() Config {
@@ -37,10 +38,20 @@ func Load() Config {
 		}
 	}
 
+	// Upper bound per reserve request (abuse guard). Not venue capacity — that still wins in DB.
+	// Default 100 is a conservative product default; override with RESERVATION_MAX_SEATS.
+	maxSeats := 100
+	if v := os.Getenv("RESERVATION_MAX_SEATS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			maxSeats = parsed
+		}
+	}
+
 	return Config{
-		ServerPort:     port,
-		DatabaseURL:    databaseURL,
-		RedisURL:       redisURL,
-		ReservationTTL: time.Duration(ttlMinutes) * time.Minute,
+		ServerPort:             port,
+		DatabaseURL:            databaseURL,
+		RedisURL:               redisURL,
+		ReservationTTL:         time.Duration(ttlMinutes) * time.Minute,
+		MaxSeatsPerReservation: maxSeats,
 	}
 }

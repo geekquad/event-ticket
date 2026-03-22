@@ -8,7 +8,8 @@ import (
 
 type EventRepository interface {
 	List(ctx context.Context) ([]entities.Event, error)
-	// TryAddReservedSlots atomically increments reserved_slots when booked_slots+reserved_slots+qty <= venue capacity.
+	// TryAddReservedSlots increments reserved_slots when capacity allows. Returns (true, nil) on success;
+	// (false, ErrInsufficientCapacity) if the event exists but not enough seats; (false, ErrNotFound) if no event.
 	TryAddReservedSlots(ctx context.Context, eventID string, quantity int) (ok bool, err error)
 	// TransferReservedToBooked moves quantity from reserved to booked (confirm path).
 	TransferReservedToBooked(ctx context.Context, eventID string, quantity int) (ok bool, err error)

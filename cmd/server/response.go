@@ -18,6 +18,10 @@ func handleError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, entities.ErrNotFound):
 		respondError(c, http.StatusNotFound, "resource not found")
+	case errors.Is(err, entities.ErrInvalidQuantity):
+		respondError(c, http.StatusBadRequest, "invalid quantity")
+	case errors.Is(err, entities.ErrInsufficientCapacity):
+		respondError(c, http.StatusConflict, "insufficient capacity")
 	case errors.Is(err, entities.ErrTicketUnavailable):
 		respondError(c, http.StatusConflict, "ticket unavailable")
 	case errors.Is(err, entities.ErrUnauthorized):
