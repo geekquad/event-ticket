@@ -5,10 +5,7 @@ This document answers two questions:
 1. Why does the current system work?
 2. How would it need to evolve at higher scale?
 
-Simple rule:
-
-- `README.md` explains how to run and use the system.
-- `design.md` explains why the design works, its trade-offs, and how it scales.
+**Doc split:** [README.md](README.md) — run and use. **[ARCHITECTURE.md](ARCHITECTURE.md)** — packages, routes, schema columns, repository methods, SQL/Lua snippets, HTTP error mapping. **This file** — rationale, assumptions, trade-offs, edge cases, and scaling (no duplicate route or port inventories).
 
 ---
 
@@ -29,57 +26,22 @@ The model is quantity-based, not seat-based.
 
 ---
 
-## High-Level Architecture
+## Where the code lives
 
-### Layers
+Layer layout, HTTP routes, and **full table/column/index reference**: [ARCHITECTURE.md](ARCHITECTURE.md) (see *High-level shape*, *Runtime components*, *Data model*).
 
-- `cmd/server` — HTTP bootstrap, router, handlers, frontend serving
-- `internal/service` — business logic
-- `internal/ports` — interfaces between service and infrastructure
-- `internal/infra/postgres` — repositories and transaction helper
-- `internal/infra/redis` — temporary reservation locks
-
-### Main runtime pieces
-
-- Gin HTTP API
-- PostgreSQL for durable state
-- Redis for short-lived reservation locks
-- static frontend under `cmd/server/frontend`
+At a glance: Gin HTTP API, PostgreSQL for durable state, Redis for short-lived reservation locks, static frontend under `cmd/server/frontend`.
 
 ---
 
-## Data Model
+## Data model (conceptual)
 
-### `venues`
+- **`venues`** — static metadata; **`capacity`** is the hard limit.
+- **`events`** — event metadata plus live counters **`booked_slots`** and **`reserved_slots`** (inventory row for quantity-based sales).
+- **`bookings`** — one row per user/event/quantity with lifecycle **`RESERVED` → `CONFIRMED` / `CANCELLED`**.
+- **`audit_logs`** — append-only operational history.
 
-- Stores static venue data
-- `capacity` is the hard limit
-
-### `events`
-
-- Stores event metadata
-- Stores live counters:
-  - `booked_slots`
-  - `reserved_slots`
-
-### `bookings`
-
-Each row represents:
-
-- one user
-- one event
-- one quantity
-- one lifecycle
-
-Lifecycle:
-
-- `RESERVED`
-- `CONFIRMED`
-- `CANCELLED`
-
-### `audit_logs`
-
-Append-only operational history for booking actions and failures.
+**Schema details** (constraints, indexes, `audit_logs` fields, `metadata` type): [ARCHITECTURE.md — Data model](ARCHITECTURE.md#data-model).
 
 ---
 
@@ -115,6 +77,8 @@ This makes repeated or competing transitions fail safely instead of silently ove
 ---
 
 ## Booking Flow Summary
+
+**Implementation steps** (validation quirks, repo calls, timer cleanup): [ARCHITECTURE.md — Booking workflows](ARCHITECTURE.md#booking-workflows).
 
 ### Reserve
 
@@ -368,4 +332,4 @@ The current design is a solid intermediate system:
 
 Its main limitations are hot-row contention, in-process expiry timers, and the lack of idempotency and seat-level modeling.
 
-For code structure, see `ARCHITECTURE.md`. For the detailed runtime sequence, see `reservelogic.md`.
+For code structure and ports, see [ARCHITECTURE.md](ARCHITECTURE.md). For the detailed runtime sequence, see [reservelogic.md](reservelogic.md).

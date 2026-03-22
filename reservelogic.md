@@ -611,4 +611,4 @@ Its main future pain points are:
 - non-durable in-process expiry timers
 - quantity-only inventory
 
-For the broader codebase structure, see `ARCHITECTURE.md`. For the design rationale and assumptions, see `design.md`.
+For structural reference (routes, schema, ports), see [ARCHITECTURE.md](ARCHITECTURE.md). For rationale, assumptions, and trade-offs, see [design.md](design.md).

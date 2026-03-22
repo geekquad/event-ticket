@@ -1,6 +1,8 @@
 # Architecture
 
-This document describes the current code structure and the runtime architecture as it exists today.
+This document is the **structural reference**: packages, HTTP routes, schema highlights, repository ports, and how transactions and Redis are wired in code.
+
+For **why** the system is shaped this way (assumptions, trade-offs, edge cases, scaling), see [design.md](design.md). For long-form reserve/confirm/cancel flows, see [reservelogic.md](reservelogic.md).
 
 ---
 
@@ -14,177 +16,22 @@ The project follows a lightweight ports-and-adapters style:
 - `internal/infra/postgres` implements repositories and transaction handling.
 - `internal/infra/redis` implements reservation lock storage.
 
-The important architectural decision is:
-
-> Inventory is tracked on the `events` row with counters, while Redis only tracks temporary reservation ownership.
-
----
-
-## Directory Structure
-
-```text
-event-ticket/
-├── cmd/
-│   └── server/
-│       ├── container.go
-│       ├── frontend/
-│       │   ├── app.js
-│       │   ├── index.html
-│       │   ├── paths.go
-│       │   └── styles.css
-│       ├── handler/
-│       │   ├── booking_handler.go
-│       │   ├── event_handler.go
-│       │   ├── response.go
-│       │   ├── router.go
-│       │   └── user_handler.go
-│       └── main.go
-├── internal/
-│   ├── config/
-│   ├── entities/
-│   ├── infra/
-│   │   ├── postgres/
-│   │   └── redis/
-│   ├── middleware/
-│   ├── ports/
-│   └── service/
-├── migrations/
-├── specs/
-├── Dockerfile
-└── docker-compose.yml
-```
-
----
-
-## Runtime Components
-
-### HTTP layer
-
-Gin exposes these routes:
-
-- `GET /`
-- `GET /styles.css`
-- `GET /app.js`
-- `GET /health`
-- `GET /events`
-- `GET /users`
-- `POST /booking/reserve`
-- `POST /booking/confirm`
-- `DELETE /booking/:bookingId`
-- `GET /booking/mine`
-
-`cmd/server/frontend.ResolveDir()` locates static frontend files either from:
-
-- `FRONTEND_DIR`, or
-- the repo tree (`cmd/server/frontend`)
-
-### Service layer
-
-Services are thin for reads and fuller for bookings:
-
-- `eventService` delegates to `EventRepository.List`
-- `userService` delegates to `UserRepository.List`
-- `bookingService` owns reserve, confirm, cancel, cleanup coordination, and audit writing
-
-### PostgreSQL layer
-
-PostgreSQL stores:
-
-- users
-- venues
-- events
-- bookings
-- audit logs
-
-It also enforces inventory changes through atomic updates on `events`.
-
-### Redis layer
-
-Redis stores only the short-lived reservation lock:
-
-- key: `reservation:<eventID>:<userID>`
-- value: `<quantity>|<bookingID>`
-
----
-
-## Data Model
-
-### `users`
-
-Simplified demo identities. The caller passes one of these IDs in `X-User-ID`.
-
-### `venues`
-
-Static venue metadata plus `capacity`. Capacity is authoritative here.
-
-### `events`
-
-`events` is now the main inventory row.
-
-Columns of interest:
-
-- `venue_id`
-- `booked_slots`
-- `reserved_slots`
-- `date_time`
-
-Important constraints / indexes:
-
-- `CHECK (booked_slots >= 0)`
-- `CHECK (reserved_slots >= 0)`
-- `idx_events_date_time`
-- `idx_events_venue_id`
-- `idx_events_venue_id_date_time` unique index
-
-### `bookings`
-
-Each booking has:
-
-- `user_id`
-- `event_id`
-- `quantity`
-- `status`
-- `expires_at`
-- `created_at`
-- `updated_at`
-
-Statuses:
-
-- `RESERVED`
-- `CONFIRMED`
-- `CANCELLED`
-
-### `audit_logs`
-
-Append-only rows with:
-
-- `entity_type`
-- `entity_id`
-- `action`
-- `user_id`
-- `outcome`
-- `quantity`
-- `metadata`
-- `created_at`
-
-`metadata` is `JSON`, not `JSONB`.
+**Correctness split (Postgres vs Redis):** explained in [design.md — Core design rule](design.md#core-design-rule).
 
 ---
 
 ## Inventory Model
 
-The system no longer computes capacity by summing bookings on every request.
-
-Current model:
+Availability for listing (and the mental model for counters) is:
 
 ```text
 available = venues.capacity - events.booked_slots - events.reserved_slots
 ```
 
-Meaning:
+- `booked_slots` — confirmed purchases  
+- `reserved_slots` — holds not yet confirmed  
 
-- `booked_slots` = confirmed purchased seats
-- `reserved_slots` = seats currently held but not yet confirmed
+Why counter updates prevent overselling: [design.md — Why this works](design.md#why-this-works).
 
 Event listing uses:
 
@@ -197,6 +44,8 @@ INNER JOIN venues v ON v.id = e.venue_id
 WHERE e.date_time > NOW()
 ORDER BY e.date_time ASC
 ```
+
+Expired cleanup adjusts `reserved_slots` with `GREATEST(e.reserved_slots - sub, 0)` so reconciliation stays safe if counters drift low. Concurrency guarantees (same user vs cross-user, confirm rules): [design.md — Concurrency model](design.md#concurrency-model).
 
 ---
 
@@ -231,15 +80,6 @@ This avoids deleting a lock unless the expected value still matches.
 ### Read owner
 
 Confirm uses `GET` through `GetOwner()` and compares the exact value.
-
-### What Redis does not own
-
-Redis does not store:
-
-- final booking state
-- capacity
-- durable booking records
-- audit history
 
 ---
 
@@ -285,6 +125,8 @@ This keeps repository methods reusable without creating duplicate `Tx` and non-`
 ---
 
 ## Booking Workflows
+
+Narrative version (lifecycle and “why these steps”): [design.md — Booking flow summary](design.md#booking-flow-summary).
 
 ### Reserve
 
@@ -336,54 +178,11 @@ Both ensure expired reservations release `reserved_slots`.
 
 ---
 
-## Consistency Guarantees
-
-### Same user, same event
-
-Redis prevents concurrent reserve attempts for the same `(eventID, userID)` pair.
-
-### Cross-user capacity
-
-The DB protects capacity with conditional atomic updates on `events`.
-
-Reserve succeeds only if:
-
-```sql
-booked_slots + reserved_slots + quantity <= venues.capacity
-```
-
-### Confirm correctness
-
-Confirm requires:
-
-- the booking row still be `RESERVED`
-- the Redis key still exist
-- the Redis value still match the expected `quantity|bookingID`
-
-### Counter reconciliation
-
-Expired cleanup uses:
-
-```sql
-SET reserved_slots = GREATEST(e.reserved_slots - a.sub, 0)
-```
-
-This is intentionally self-healing if counters drift low.
-
----
-
 ## Audit Isolation
 
-`auditRepo` writes with the root DB handle, not the transaction-bound executor.
+`auditRepo` writes with the root DB handle, not the transaction-bound executor (so failure audits can survive booking transaction rollback).
 
-Why:
-
-- failure audits should survive rollback
-- business flow and operational logging are intentionally decoupled
-
-Trade-off:
-
-- audit rows are not part of the same atomic transaction as the business update
+Rationale and trade-offs: [design.md — Audit logging](design.md#audit-logging).
 
 ---
 
@@ -419,20 +218,9 @@ The UI uses the same origin when served from the API server and interacts with:
 
 ---
 
-## Key Trade-offs
+## Related documentation
 
-### What is strong
-
-- simple architecture
-- clear ownership split between Postgres and Redis
-- efficient event listing
-- correct inventory transitions under normal concurrency
-
-### What is weak
-
-- hot events still serialize on the same `events` row
-- expiry cleanup partly depends on in-process timers
-- no seat-level assignment
-- cancellation and return are represented by the same terminal state
-
-For the more narrative explanation of runtime behavior, see `design.md` and `reservelogic.md`.
+| Topic | Document |
+|--------|-----------|
+| Assumptions, trade-off table, edge cases, future work, scaling | [design.md](design.md) |
+| Detailed reserve / confirm / cancel sequences | [reservelogic.md](reservelogic.md) |
