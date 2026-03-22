@@ -176,6 +176,8 @@ Impact:
 
 ## Audit Logging
 
+Recent rows are exposed read-only at **`GET /audit/logs`** (newest first; optional `limit` and **`eventId`** to filter by event via the booking join; see [ARCHITECTURE.md](ARCHITECTURE.md) and OpenAPI). This demo endpoint is not authenticated.
+
 Every booking action writes audit rows:
 
 - `BOOKING_CREATED`

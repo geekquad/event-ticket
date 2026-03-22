@@ -11,7 +11,7 @@ For **why** the system is shaped this way (assumptions, trade-offs, edge cases, 
 The project follows a lightweight ports-and-adapters style:
 
 - `cmd/server` exposes the HTTP API and serves the static frontend.
-- `internal/service` contains booking, event, and user use cases.
+- `internal/service` contains booking, event, user, and audit use cases.
 - `internal/ports` defines interfaces used by the service layer.
 - `internal/infra/postgres` implements repositories and transaction handling.
 - `internal/infra/redis` implements reservation lock storage.
@@ -181,6 +181,7 @@ The UI uses the same origin when served from the API server and interacts with:
 
 - `/events`
 - `/users`
+- `/audit/logs`
 - `/booking/reserve`
 - `/booking/confirm`
 - `/booking/mine`

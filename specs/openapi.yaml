@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Event Ticket API
   description: |
-    HTTP API for listing events and users, and for reserving, confirming, and cancelling bookings.
+    HTTP API for listing events and users, reserving, confirming, and cancelling bookings, and reading recent audit log entries.
     Authenticated calls use the `X-User-ID` header (demo identity; no JWT).
   version: 1.0.0
   license:
@@ -22,6 +22,8 @@ tags:
     description: Reservation lifecycle
   - name: Users
     description: Demo user directory
+  - name: Audit
+    description: Operational audit trail (read-only; demo — no auth)
 
 paths:
   /health:
@@ -85,6 +87,44 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorBody"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /audit/logs:
+    get:
+      tags: [Audit]
+      summary: List recent audit log entries
+      description: |
+        Newest-first append-only booking audit rows (`BOOKING_*` actions). Unauthenticated in this demo.
+        Omit `limit` to use the server default (100); maximum is 500.
+        Optional `eventId` restricts rows to audits for bookings on that event (`entity_id` is resolved via `bookings.event_id`).
+      operationId: listAuditLogs
+      security: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Max rows to return (1–500; default 100 when omitted or zero)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+        - name: eventId
+          in: query
+          required: false
+          description: If set, only audit entries whose booking belongs to this event
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditLogListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -347,6 +387,55 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/User"
+
+    AuditAction:
+      type: string
+      enum: [BOOKING_CREATED, BOOKING_CONFIRMED, BOOKING_CANCELLED]
+
+    AuditOutcome:
+      type: string
+      enum: [SUCCESS, FAILURE]
+
+    AuditLog:
+      type: object
+      required: [id, entityType, entityId, action, userId, outcome, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        entityType:
+          type: string
+          example: booking
+        entityId:
+          type: string
+          format: uuid
+        action:
+          $ref: "#/components/schemas/AuditAction"
+        userId:
+          type: string
+          format: uuid
+        outcome:
+          $ref: "#/components/schemas/AuditOutcome"
+        quantity:
+          type: integer
+          minimum: 1
+          description: Present when applicable to the action
+        metadata:
+          type: object
+          additionalProperties: true
+          description: JSON object; shape varies by action/outcome
+        createdAt:
+          type: string
+          format: date-time
+
+    AuditLogListResponse:
+      type: object
+      required: [logs]
+      properties:
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditLog"
 
     BookingStatus:
       type: string

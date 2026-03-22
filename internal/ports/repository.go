@@ -36,6 +36,9 @@ type BookingRepository interface {
 
 type AuditRepository interface {
 	Log(ctx context.Context, entry *entities.AuditLog) error
+	// ListRecent returns the newest rows first, up to limit.
+	// When eventID is non-nil, only rows for bookings on that event are returned (entity_type = booking, entity_id = booking id).
+	ListRecent(ctx context.Context, limit int, eventID *string) ([]entities.AuditLog, error)
 }
 
 type UserRepository interface {

@@ -20,3 +20,7 @@ type BookingService interface {
 type UserService interface {
 	ListUsers(ctx context.Context) ([]entities.User, error)
 }
+
+type AuditService interface {
+	ListRecent(ctx context.Context, limit int, eventID *string) ([]entities.AuditLog, error)
+}

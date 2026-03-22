@@ -45,8 +45,9 @@ func NewContainer(cfg config.Config) (*Container, error) {
 	bookingService := service.NewBookingService(bookingRepo, eventRepo, auditRepo, lockManager, transactor,
 		cfg.ReservationTTL, cfg.MaxSeatsPerReservation)
 	userService := service.NewUserService(userRepo)
+	auditService := service.NewAuditService(auditRepo)
 
-	router := handler.NewRouter(eventService, bookingService, userService, frontend.ResolveDir())
+	router := handler.NewRouter(eventService, bookingService, userService, auditService, frontend.ResolveDir())
 
 	return &Container{
 		DB:     db,

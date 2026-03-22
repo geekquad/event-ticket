@@ -16,6 +16,7 @@ func NewRouter(
 	eventService ports.EventService,
 	bookingService ports.BookingService,
 	userService ports.UserService,
+	auditService ports.AuditService,
 	frontendDir string,
 ) *gin.Engine {
 	if mode := os.Getenv("GIN_MODE"); mode != "" {
@@ -42,6 +43,9 @@ func NewRouter(
 
 	userHandler := NewUserHandler(userService)
 	router.GET("/users", userHandler.ListUsers)
+
+	auditHandler := NewAuditHandler(auditService)
+	router.GET("/audit/logs", auditHandler.ListAuditLogs)
 
 	// Serve frontend
 	if frontendDir != "" {
