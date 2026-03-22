@@ -11,7 +11,7 @@ type Event struct {
 	Description     string    `json:"description"`
 	DateTime        time.Time `json:"dateTime"`
 	Venue Venue `json:"venue"`
-	// AvailableCount is computed when listing events (venue capacity minus active bookings); it is not a DB column.
+	// AvailableCount is computed when listing events from venue capacity minus events.booked_slots and reserved_slots.
 	AvailableCount int `json:"availableCount"`
 	CreatedAt       time.Time `json:"createdAt"`
 }

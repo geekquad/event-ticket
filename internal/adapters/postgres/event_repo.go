@@ -26,11 +26,7 @@ func (r *eventRepo) List(ctx context.Context) ([]entities.Event, error) {
 	rows, err := r.exec(ctx).QueryContext(ctx, `
 		SELECT
 			e.id, e.name, e.description, e.date_time,
-			v.capacity - COALESCE((
-				SELECT SUM(b.quantity) FROM bookings b
-				WHERE b.event_id = e.id
-				AND (b.status = 'CONFIRMED' OR (b.status = 'RESERVED' AND b.expires_at > NOW()))
-			), 0) AS available_count,
+			GREATEST(v.capacity - e.booked_slots - e.reserved_slots, 0) AS available_count,
 			e.created_at,
 			v.id, v.name, v.address, v.capacity, v.seat_map, v.created_at
 		FROM events e
@@ -63,17 +59,80 @@ func (r *eventRepo) List(ctx context.Context) ([]entities.Event, error) {
 	return events, nil
 }
 
-func (r *eventRepo) LockEventCapacity(ctx context.Context, eventID string) (int, error) {
-	var capacity int
-	err := r.exec(ctx).QueryRowContext(ctx,
-		`SELECT v.capacity FROM events e JOIN venues v ON e.venue_id = v.id WHERE e.id = $1 FOR UPDATE OF e`,
-		eventID,
-	).Scan(&capacity)
+func (r *eventRepo) TryAddReservedSlots(ctx context.Context, eventID string, quantity int) (bool, error) {
+	res, err := r.exec(ctx).ExecContext(ctx, `
+		UPDATE events e
+		SET reserved_slots = e.reserved_slots + $2
+		FROM venues v
+		WHERE e.id = $1::uuid AND e.venue_id = v.id
+		  AND e.booked_slots + e.reserved_slots + $2 <= v.capacity
+	`, eventID, quantity)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, entities.ErrNotFound
-		}
-		return 0, fmt.Errorf("lock event capacity: %w", err)
+		return false, fmt.Errorf("try add reserved slots: %w", err)
 	}
-	return capacity, nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		var dummy int
+		err := r.exec(ctx).QueryRowContext(ctx, `SELECT 1 FROM events WHERE id = $1::uuid`, eventID).Scan(&dummy)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, entities.ErrNotFound
+		}
+		if err != nil {
+			return false, fmt.Errorf("lookup event: %w", err)
+		}
+		return false, nil
+	}
+	return true, nil
+}
+
+func (r *eventRepo) TransferReservedToBooked(ctx context.Context, eventID string, quantity int) (bool, error) {
+	res, err := r.exec(ctx).ExecContext(ctx, `
+		UPDATE events e
+		SET reserved_slots = e.reserved_slots - $2,
+		    booked_slots = e.booked_slots + $2
+		WHERE e.id = $1::uuid AND e.reserved_slots >= $2
+	`, eventID, quantity)
+	if err != nil {
+		return false, fmt.Errorf("transfer reserved to booked: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	return n == 1, nil
+}
+
+func (r *eventRepo) ReleaseReservedSlots(ctx context.Context, eventID string, quantity int) (bool, error) {
+	res, err := r.exec(ctx).ExecContext(ctx, `
+		UPDATE events e
+		SET reserved_slots = e.reserved_slots - $2
+		WHERE e.id = $1::uuid AND e.reserved_slots >= $2
+	`, eventID, quantity)
+	if err != nil {
+		return false, fmt.Errorf("release reserved slots: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	return n == 1, nil
+}
+
+func (r *eventRepo) ReleaseBookedSlots(ctx context.Context, eventID string, quantity int) (bool, error) {
+	res, err := r.exec(ctx).ExecContext(ctx, `
+		UPDATE events e
+		SET booked_slots = e.booked_slots - $2
+		WHERE e.id = $1::uuid AND e.booked_slots >= $2
+	`, eventID, quantity)
+	if err != nil {
+		return false, fmt.Errorf("release booked slots: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	return n == 1, nil
 }

@@ -56,10 +56,6 @@ func (s *bookingService) Reserve(ctx context.Context, userID, eventID string, qu
 		quantity = 1
 	}
 
-	if err := s.bookingRepo.CancelExpiredReservations(ctx); err != nil {
-		slog.Warn("failed to cleanup expired reservations", "error", err)
-	}
-
 	bookingID := uuid.New().String()
 	lockKey := reservationLockKey(eventID, userID)
 	lockVal := reservationLockValue(userID, quantity, bookingID)
@@ -89,17 +85,11 @@ func (s *bookingService) Reserve(ctx context.Context, userID, eventID string, qu
 			return err
 		}
 
-		capacity, err := s.eventRepo.LockEventCapacity(txCtx, eventID)
+		ok, err := s.eventRepo.TryAddReservedSlots(txCtx, eventID, quantity)
 		if err != nil {
 			return err
 		}
-
-		allocated, err := s.bookingRepo.SumAllocatedQuantityForEvent(txCtx, eventID)
-		if err != nil {
-			return err
-		}
-
-		if capacity-allocated < quantity {
+		if !ok {
 			s.writeAudit(txCtx, entities.AuditActionBookingCreated, entities.AuditOutcomeFailure,
 				"", userID, intPtr(quantity), map[string]any{"reason": "not enough available seats", "eventId": eventID})
 			return entities.ErrTicketUnavailable
@@ -110,6 +100,9 @@ func (s *bookingService) Reserve(ctx context.Context, userID, eventID string, qu
 			return err
 		}
 		if has {
+			if _, relErr := s.eventRepo.ReleaseReservedSlots(txCtx, eventID, quantity); relErr != nil {
+				return relErr
+			}
 			s.writeAudit(txCtx, entities.AuditActionBookingCreated, entities.AuditOutcomeFailure,
 				"", userID, intPtr(quantity), map[string]any{"reason": "active reservation exists for event", "eventId": eventID})
 			return entities.ErrConflict
@@ -118,14 +111,14 @@ func (s *bookingService) Reserve(ctx context.Context, userID, eventID string, qu
 		now := time.Now()
 		expiresAt := now.Add(s.reservationTTL)
 		b := &entities.Booking{
-			ID:         bookingID,
-			UserID:     userID,
-			EventID:    eventID,
-			Quantity:   quantity,
-			Status:     entities.BookingStatusReserved,
-			ExpiresAt:  &expiresAt,
-			CreatedAt:  now,
-			UpdatedAt:  now,
+			ID:        bookingID,
+			UserID:    userID,
+			EventID:   eventID,
+			Quantity:  quantity,
+			Status:    entities.BookingStatusReserved,
+			ExpiresAt: &expiresAt,
+			CreatedAt: now,
+			UpdatedAt: now,
 		}
 
 		if err := s.bookingRepo.Create(txCtx, b); err != nil {
@@ -148,7 +141,42 @@ func (s *bookingService) Reserve(ctx context.Context, userID, eventID string, qu
 			"eventId":   booking.EventID,
 		})
 
+	go s.scheduleReservationUnlock(booking.ID)
+
 	return booking, nil
+}
+
+// scheduleReservationUnlock runs after the reservation TTL (aligned with Redis lock expiry).
+// If the booking is still RESERVED and expired, it cancels the row and decrements reserved_slots.
+// Confirm/Cancel paths update inventory earlier; this is idempotent.
+func (s *bookingService) scheduleReservationUnlock(bookingID string) {
+	timer := time.NewTimer(s.reservationTTL)
+	defer timer.Stop()
+	<-timer.C
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err := s.transactor.WithTransaction(ctx, func(txCtx context.Context) error {
+		eid, qty, ok, err := s.bookingRepo.CancelReservationIfExpired(txCtx, bookingID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		released, err := s.eventRepo.ReleaseReservedSlots(txCtx, eid, qty)
+		if err != nil {
+			return err
+		}
+		if !released {
+			return fmt.Errorf("release reserved slots after expiry: inventory mismatch for event %s", eid)
+		}
+		return nil
+	})
+	if err != nil {
+		slog.Error("reservation unlock failed", "bookingId", bookingID, "error", err)
+	}
 }
 
 func (s *bookingService) Confirm(ctx context.Context, userID, bookingID string) (*entities.Booking, error) {
@@ -188,6 +216,13 @@ func (s *bookingService) Confirm(ctx context.Context, userID, bookingID string) 
 		}
 		if n == 0 {
 			return entities.ErrConflict
+		}
+		ok, uerr := s.eventRepo.TransferReservedToBooked(txCtx, booking.EventID, booking.Quantity)
+		if uerr != nil {
+			return uerr
+		}
+		if !ok {
+			return fmt.Errorf("transfer reserved to booked: inventory mismatch for event %s", booking.EventID)
 		}
 		return nil
 	})
@@ -238,9 +273,31 @@ func (s *bookingService) Cancel(ctx context.Context, userID, bookingID string) e
 	}
 
 	wasReserved := booking.Status == entities.BookingStatusReserved
+	wasConfirmed := booking.Status == entities.BookingStatusConfirmed
 
 	err = s.transactor.WithTransaction(ctx, func(txCtx context.Context) error {
-		return s.bookingRepo.UpdateStatus(txCtx, bookingID, entities.BookingStatusCancelled)
+		if err := s.bookingRepo.UpdateStatus(txCtx, bookingID, entities.BookingStatusCancelled); err != nil {
+			return err
+		}
+		if wasReserved {
+			ok, err := s.eventRepo.ReleaseReservedSlots(txCtx, booking.EventID, booking.Quantity)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("release reserved slots: inventory mismatch for event %s", booking.EventID)
+			}
+		}
+		if wasConfirmed {
+			ok, err := s.eventRepo.ReleaseBookedSlots(txCtx, booking.EventID, booking.Quantity)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("release booked slots: inventory mismatch for event %s", booking.EventID)
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		s.writeAudit(ctx, entities.AuditActionBookingCancelled, entities.AuditOutcomeFailure,

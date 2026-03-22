@@ -130,30 +130,43 @@ func (r *bookingRepo) ConfirmReservation(ctx context.Context, bookingID string) 
 	return n, nil
 }
 
-// CancelExpiredReservations cancels booking records whose expires_at has passed.
+// CancelExpiredReservations cancels expired RESERVED bookings and decrements event reserved_slots (atomic).
 func (r *bookingRepo) CancelExpiredReservations(ctx context.Context) error {
-	_, err := r.exec(ctx).ExecContext(ctx,
-		`UPDATE bookings SET status = 'CANCELLED', updated_at = NOW()
-		 WHERE status = 'RESERVED' AND expires_at < NOW()`,
-	)
+	_, err := r.exec(ctx).ExecContext(ctx, `
+		WITH expired AS (
+			UPDATE bookings SET status = 'CANCELLED', updated_at = NOW()
+			WHERE status = 'RESERVED' AND expires_at <= NOW()
+			RETURNING event_id, quantity
+		),
+		agg AS (
+			SELECT event_id, SUM(quantity) AS sub FROM expired GROUP BY event_id
+		)
+		UPDATE events e
+		SET reserved_slots = e.reserved_slots - a.sub
+		FROM agg a
+		WHERE e.id = a.event_id AND e.reserved_slots >= a.sub
+	`)
 	if err != nil {
 		return fmt.Errorf("cancel expired reservations: %w", err)
 	}
 	return nil
 }
 
-func (r *bookingRepo) SumAllocatedQuantityForEvent(ctx context.Context, eventID string) (int, error) {
-	var sum int64
-	err := r.exec(ctx).QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(quantity), 0) FROM bookings
-		 WHERE event_id = $1
-		 AND (status = 'CONFIRMED' OR (status = 'RESERVED' AND expires_at > NOW()))`,
-		eventID,
-	).Scan(&sum)
+func (r *bookingRepo) CancelReservationIfExpired(ctx context.Context, bookingID string) (string, int, bool, error) {
+	var eventID string
+	var qty int
+	err := r.exec(ctx).QueryRowContext(ctx, `
+		UPDATE bookings SET status = 'CANCELLED', updated_at = NOW()
+		WHERE id = $1::uuid AND status = 'RESERVED' AND expires_at <= NOW()
+		RETURNING event_id, quantity
+	`, bookingID).Scan(&eventID, &qty)
 	if err != nil {
-		return 0, fmt.Errorf("sum allocated quantity: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", 0, false, nil
+		}
+		return "", 0, false, fmt.Errorf("cancel reservation if expired: %w", err)
 	}
-	return int(sum), nil
+	return eventID, qty, true, nil
 }
 
 func (r *bookingRepo) HasActiveReservedBookingForUserEvent(ctx context.Context, userID, eventID string) (bool, error) {
