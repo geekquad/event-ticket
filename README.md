@@ -22,7 +22,7 @@ internal/
   entities/          Domain models: Event, Ticket, Booking, AuditLog, User
   ports/             Interfaces (EventRepository, BookingService, LockManager, …)
   application/       Use-case services (booking_service, event_service, user_service)
-  adapters/
+  infra/
     postgres/        Repository implementations
     redis/           LockManager (distributed lock via SET NX EX)
   config/            Env-var config
@@ -76,13 +76,35 @@ Failure entries are written **outside** any rolled-back transaction so they alwa
 
 ## Prerequisites
 
-- Go 1.24+
+- Go 1.24+ (for local `go run` without Docker)
 - Docker & Docker Compose
-- `psql` CLI (for running migrations)
 
 ---
 
-## Quick Start
+## Run everything in Docker
+
+From the repo root (no local Go or `psql` required):
+
+```bash
+docker compose up --build
+```
+
+- **API + bundled UI**: [http://localhost:8085](http://localhost:8085)
+- **Postgres** on host port **5433**, **Redis** on **6379** (same as local dev defaults)
+- **Schema + seed** (`001_init.sql`, `002_seed.sql`) run automatically on the **first** start of an empty Postgres volume.
+
+Reset the database volume after schema changes:
+
+```bash
+docker compose down -v
+docker compose up --build
+```
+
+If you add new SQL migrations, mount them in `docker-compose.yml` under `postgres.volumes` (see comments in that file). The whole `migrations/` directory is **not** mounted into `docker-entrypoint-initdb.d` because `migrate.sh` would run as an init script.
+
+---
+
+## Quick Start (Go on host)
 
 ```bash
 # 1. Enter the repo
@@ -91,8 +113,8 @@ cd event-ticket
 # 2. Copy environment config
 cp .env.example .env
 
-# 3. Start PostgreSQL + Redis
-docker compose up -d
+# 3. Start PostgreSQL + Redis only
+docker compose up -d postgres redis
 
 # 4. Run migrations and seed data
 chmod +x migrations/migrate.sh

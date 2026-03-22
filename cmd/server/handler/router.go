@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"log/slog"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"ticket/internal/middleware"
 	"ticket/internal/ports"
 )
 
@@ -24,7 +25,7 @@ func NewRouter(
 	router := gin.New()
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
-	router.Use(CORSMiddleware())
+	router.Use(middleware.CORSMiddleware())
 
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})

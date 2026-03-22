@@ -1,0 +1,12 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.md
+.dockerignore
+Dockerfile
+docker-compose.yml
+terminals/
+.cursor/
+**/agent-transcripts/

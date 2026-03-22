@@ -1,4 +1,7 @@
-version: "3.9"
+# Full stack: Postgres + Redis + API (clone repo → docker compose up --build).
+# First run applies migrations from ./migrations via Postgres init (fresh volume only).
+# Reset DB: docker compose down -v && docker compose up --build
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -10,11 +13,45 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Only .sql files — do not mount the whole migrations/ folder (migrate.sh would run as init).
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+      - ./migrations/002_seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ticketbooking"]
+      interval: 3s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8085:8085"
+    environment:
+      SERVER_PORT: "8085"
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/ticketbooking?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      GIN_MODE: release
+      FRONTEND_DIR: /frontend
+      RESERVATION_TTL_MINUTES: "10"
+      RESERVATION_MAX_SEATS: "100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:
