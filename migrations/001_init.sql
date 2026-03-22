@@ -16,13 +16,18 @@ CREATE TABLE venues (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- booked_slots / reserved_slots replace SUM(bookings) for capacity and listing (updated atomically in app).
 CREATE TABLE events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
     description TEXT,
     date_time TIMESTAMPTZ NOT NULL,
     venue_id UUID NOT NULL REFERENCES venues(id),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    booked_slots INT NOT NULL DEFAULT 0,
+    reserved_slots INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT events_booked_slots_nonnegative CHECK (booked_slots >= 0),
+    CONSTRAINT events_reserved_slots_nonnegative CHECK (reserved_slots >= 0)
 );
 
 CREATE INDEX idx_events_date_time ON events(date_time);
@@ -50,7 +55,7 @@ CREATE TABLE audit_logs (
     user_id VARCHAR(255) NOT NULL,
     outcome VARCHAR(10) NOT NULL DEFAULT 'SUCCESS',
     quantity INT,
-    metadata JSONB,
+    metadata JSON,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
