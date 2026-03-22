@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 
+	"ticket/cmd/server/frontend"
 	"ticket/cmd/server/handler"
 	"ticket/internal/config"
 	"ticket/internal/infra/postgres"
@@ -45,7 +46,7 @@ func NewContainer(cfg config.Config) (*Container, error) {
 		cfg.ReservationTTL, cfg.MaxSeatsPerReservation)
 	userService := service.NewUserService(userRepo)
 
-	router := handler.NewRouter(eventService, bookingService, userService, resolveFrontendDir())
+	router := handler.NewRouter(eventService, bookingService, userService, frontend.ResolveDir())
 
 	return &Container{
 		DB:     db,

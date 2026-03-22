@@ -15,7 +15,10 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /
 
 COPY --from=build /out/server /server
-COPY --from=build /src/cmd/server/frontend /frontend
+# Static assets only (exclude package frontend’s paths.go from the runtime image).
+COPY --from=build /src/cmd/server/frontend/index.html /frontend/index.html
+COPY --from=build /src/cmd/server/frontend/styles.css /frontend/styles.css
+COPY --from=build /src/cmd/server/frontend/app.js /frontend/app.js
 
 ENV FRONTEND_DIR=/frontend
 EXPOSE 8085
