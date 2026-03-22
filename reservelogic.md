@@ -1,231 +1,614 @@
-# Reservation flow (`BookingService.Reserve`)
+# Booking Runtime Logic
 
-This document explains **what happens when a client calls reserve**, in order: Redis lock semantics, PostgreSQL statements, and how **Confirm** ties back to the same Redis key/value.
+This document explains the current runtime logic in detail for:
 
----
+- reserve
+- confirm
+- cancel / return
+- expiry cleanup
 
-## High-level story
-
-1. **Redis** gives you a **short-lived, per-user-per-event mutex** so the same user cannot run two concurrent reserve attempts that both touch inventory (and so **Confirm** can prove the client still “owns” the reservation window).
-2. **PostgreSQL** (inside one transaction) cleans up expired holds, **atomically** increases `events.reserved_slots` if capacity allows, ensures the user does not already have an active reservation for that event, then **inserts** the `bookings` row.
-3. On **success**, the Redis key is **left in place** until confirm, cancel, or TTL expiry (the defer does **not** release). A **background timer** fires after the same TTL to release DB inventory if the booking was never confirmed.
-
----
-
-## Step 0: Inputs and defaults
-
-| Input | Role |
-|--------|------|
-| `userID` | UUID string (demo auth: `X-User-ID`). Stored on the booking and part of the Redis **key** only. |
-| `eventID` | Target event UUID. Part of Redis **key** and booking row. |
-| `quantity` | Seat count; if `<= 0`, forced to **1**. |
-
-A new **`bookingID`** is generated with `uuid.New()` **before** any I/O. The same ID is used in Redis value, the `bookings.id` insert, and later in **Confirm**’s lock check.
+It also calls out pain points and how this design would need to evolve for very high scale.
 
 ---
 
-## Step 1: Redis — key, value, TTL, and commands
+## Overview
 
-### Key
+The current flow has two core ideas:
+
+1. Redis tracks temporary reservation ownership.
+2. PostgreSQL tracks durable state and inventory counters.
+
+That means:
+
+- Redis answers "does this user still own the reservation window?"
+- PostgreSQL answers "how many seats are reserved/booked right now?"
+
+---
+
+## Data And Lock Model
+
+### Redis key
 
 ```text
 reservation:<eventID>:<userID>
 ```
 
-Example: `reservation:550e8400-e29b-41d4-a716-446655440000:6ba7b810-9dad-11d1-80b4-00c04fd430c8`
+Example:
 
-- **Namespace** `reservation:` avoids colliding with other Redis uses.
-- **Scoped to one user and one event**: at most one active reservation workflow per pair in Redis at a time.
+```text
+reservation:1f2d...:8e4c...
+```
 
-### Value
+Why this shape:
+
+- lock is scoped to one user and one event
+- same user cannot spam two reserve requests for the same event concurrently
+
+### Redis value
 
 ```text
 <quantity>|<bookingID>
 ```
 
-Example: `2|f47ac10b-58cc-4372-a567-0e02b2c3d479`
+Example:
 
-Pipe (`|`) is a delimiter. **`userID` is not repeated** here — it is already in the Redis key (`reservation:<eventID>:<userID>`). The value carries:
-
-| Segment | Purpose |
-|---------|---------|
-| `quantity` | Matches the reservation size (Confirm re-builds the expected value with `booking.Quantity`). |
-| `bookingID` | Ties the lock to **this** booking row so Confirm can verify the lock matches the booking being paid. |
-
-### TTL
-
-Same duration as **`reservationTTL`** in app config (e.g. 2 minutes). Passed to Redis as the `SET` expiry.
-
-- When TTL elapses, Redis **deletes the key automatically**.
-- **Confirm** uses `GetOwner(key)`; if the key is gone or the value differs, confirm fails with “reservation expired or lock mismatch.”
-
-### Acquire: `SET key value NX EX <ttl_seconds>`
-
-Implemented as `SetNX` + TTL in `internal/adapters/redis/lock_manager.go`:
-
-- **NX**: set only if the key does **not** exist.
-- If the key already exists → `ok == false` → API returns **conflict** (user already in a reservation flow for that event, or stale key not yet expired).
-
-### Release: Lua script (safe unlock)
-
-```lua
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-    return redis.call("DEL", KEYS[1])
-else
-    return 0
-end
+```text
+2|c9c4f0e9-...
 ```
 
-- **Only deletes** if the stored value equals the **exact** value this client set.
-- Prevents deleting another client’s lock if something went wrong (not applicable here with one key per user+event, but correct pattern).
+Why this value exists:
 
-### When Redis is released during `Reserve`
+- confirm can verify the same booking ID is being confirmed
+- confirm can verify the same quantity is tied to the lock
 
-| Outcome | `lockAcquired` / defer |
-|---------|-------------------------|
-| **Transaction fails** (sold out, duplicate reservation, DB error, etc.) | `lockAcquired` stays **true** → **defer runs** → **Release** so the user can retry. |
-| **Transaction succeeds** | `lockAcquired` set to **false** before return → defer **does not** release → key stays until Confirm/Cancel/TTL. |
+### Booking row
 
----
+Each booking row contains:
 
-## Step 2: PostgreSQL — one transaction
+- `id`
+- `user_id`
+- `event_id`
+- `quantity`
+- `status`
+- `expires_at`
 
-All of the following run inside **`Transactor.WithTransaction`** (single BEGIN/COMMIT or ROLLBACK). The context carries the `*sql.Tx`, so every repo call uses the same transaction.
+### Event inventory row
 
-### 2.1 `CancelExpiredReservations`
+`events` stores:
 
-**Purpose:** Free inventory held by **past** `RESERVED` rows and keep `events.reserved_slots` consistent.
+- `booked_slots`
+- `reserved_slots`
 
-**What it runs (conceptually):**
+Available seats are computed as:
 
-1. **CTE `expired`:** `UPDATE bookings` → `status = 'CANCELLED'`, `updated_at = NOW()`  
-   `WHERE status = 'RESERVED' AND expires_at <= NOW()`  
-   **RETURNING** `event_id`, `quantity`.
-
-2. **CTE `agg`:** For each `event_id`, **SUM(quantity)** of those cancelled rows.
-
-3. **`UPDATE events`:** For each row in `agg`,  
-   `reserved_slots = GREATEST(reserved_slots - sub, 0)`  
-   `WHERE id = event_id`  
-   so counters stay aligned with cancelled rows even if `reserved_slots` was already lower than `sub` (drift self-heal); the table `CHECK` still enforces non-negative.
-
-If nothing is expired, the CTEs produce no rows; the `UPDATE events` affects **0** rows — still valid.
+```text
+venue.capacity - events.booked_slots - events.reserved_slots
+```
 
 ---
 
-### 2.2 `TryAddReservedSlots(eventID, quantity)`
+## Reserve Logic
 
-**Purpose:** Atomically claim inventory: increase **`events.reserved_slots`** only if **venue capacity** is not exceeded.
+### Step 1: normalize and validate input
 
-**SQL shape:**
+Inside `BookingService.Reserve`:
+
+- `quantity <= 0` becomes `1`
+- `quantity > maxSeatsPerReservation` fails with `ErrInvalidQuantity`
+
+This guard is there to stop absurd single-request quantities from reaching Redis and the DB hot path.
+
+### Step 2: generate booking ID
+
+The service generates `bookingID := uuid.New().String()` before doing any external work.
+
+That UUID is reused in:
+
+- Redis value
+- `bookings.id`
+- later confirm validation
+
+### Step 3: acquire Redis lock
+
+Redis call:
+
+```text
+SET reservation:<eventID>:<userID> "<quantity>|<bookingID>" NX EX <ttl>
+```
+
+Behavior:
+
+- if key does not exist, reserve may continue
+- if key exists, reserve fails with `ErrConflict`
+
+This is only a same-user / same-event guard. It is not a global event mutex.
+
+### Step 4: defer guarded Redis release
+
+Reserve sets:
+
+- `lockAcquired := true`
+
+and installs a defer:
+
+- if the flow later fails, Redis is released
+- if the flow succeeds, `lockAcquired` is set to `false` and the lock stays alive
+
+This is important because the lock is supposed to survive after reserve and be checked by confirm.
+
+### Step 5: begin DB transaction
+
+Everything below runs inside `Transactor.WithTransaction`.
+
+### Step 6: cancel expired reservations
+
+First operation in the transaction:
+
+- `CancelExpiredReservations()`
+
+What it does:
+
+1. Marks expired `RESERVED` bookings as `CANCELLED`
+2. Aggregates their quantities by event
+3. Decrements `events.reserved_slots` with:
+
+```sql
+SET reserved_slots = GREATEST(e.reserved_slots - a.sub, 0)
+```
+
+Why this matters:
+
+- frees stale holds before new capacity checks
+- self-heals if counters drifted
+
+### Step 7: atomically claim reserved capacity
+
+Next operation:
+
+- `eventRepo.TryAddReservedSlots(eventID, quantity)`
+
+SQL shape:
 
 ```sql
 UPDATE events e
 SET reserved_slots = e.reserved_slots + $2
 FROM venues v
-WHERE e.id = $1::uuid AND e.venue_id = v.id
+WHERE e.id = $1::uuid
+  AND e.venue_id = v.id
   AND e.booked_slots + e.reserved_slots + $2 <= v.capacity
-RETURNING e.id
+RETURNING e.id::text
 ```
 
-- **Single row update** on `events` (and read `venues.capacity` via join).
-- Uses **`RETURNING`** so one statement both applies the change and proves a row matched (no separate `RowsAffected` round trip on success).
-- If **no row** is returned: `SELECT EXISTS(SELECT 1 FROM events WHERE id = $1)` distinguishes **missing event** (`ErrNotFound`) from **event exists but not enough seats** (`ErrInsufficientCapacity`). The API returns **409** with `{"error":"insufficient capacity"}` for the latter; other reserve failures use **409** with `{"error":"conflict"}` or **404** for unknown event.
+Meaning:
 
-**Inventory model:** `booked_slots` = confirmed tickets; `reserved_slots` = held-but-not-paid; **available** = `capacity - booked - reserved` (computed in list queries).
+- reserve succeeds only if the updated quantity still fits
+- capacity is checked and increment is applied in one statement
 
----
+If no row is returned:
 
-### 2.3 `HasActiveReservedBookingForUserEvent(userID, eventID)`
+- `SELECT EXISTS(...)` distinguishes:
+  - unknown event -> `ErrNotFound`
+  - known event but no seats -> `ErrInsufficientCapacity`
 
-**Purpose:** Enforce **one active reservation per user per event** at the DB layer (in addition to Redis).
+### Step 8: enforce one active reservation per user/event
+
+Next query:
 
 ```sql
 SELECT EXISTS(
-  SELECT 1 FROM bookings
-  WHERE user_id = $1 AND event_id = $2
-  AND status = 'RESERVED' AND expires_at > NOW()
+  SELECT 1
+  FROM bookings
+  WHERE user_id = $1
+    AND event_id = $2
+    AND status = 'RESERVED'
+    AND expires_at > NOW()
 )
 ```
 
-- If **true**, the user already has a non-expired `RESERVED` row. That should be rare right after `TryAddReservedSlots` in a correct single-threaded flow, but it covers races or weird retries.
+If true:
 
-**If `has == true`:**
+1. release the increment just made on `events.reserved_slots`
+2. return `ErrConflict`
 
-1. **`ReleaseReservedSlots(eventID, quantity)`** — reverses the increment from `TryAddReservedSlots` in the **same transaction** so inventory is not leaked.
-2. Returns **`ErrConflict`** to the client.
+Why this still exists even with Redis:
 
----
+- Redis blocks concurrent same-user reserve attempts right now
+- this DB check protects against stale conditions, retries, or cross-process edge cases
 
-### 2.4 `Create(booking)`
+### Step 9: insert booking row
 
-**Purpose:** Persist the reservation.
+Insert:
 
 ```sql
-INSERT INTO bookings (id, user_id, event_id, quantity, status, expires_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO bookings (
+  id, user_id, event_id, quantity, status, expires_at, created_at, updated_at
+)
+VALUES (...)
 ```
 
-- `id` = pre-generated `bookingID` (matches Redis value).
-- `status` = `'RESERVED'`.
-- `expires_at` = `now + reservationTTL` (aligned with Redis TTL conceptually).
+Inserted values:
 
-Failure (e.g. FK violation) rolls back the whole transaction, including `TryAddReservedSlots` — so **`reserved_slots` is rolled back** too.
+- `status = RESERVED`
+- `expires_at = now + reservationTTL`
+
+If this insert fails, the transaction rolls back and the deferred Redis release runs.
+
+### Step 10: commit and keep lock alive
+
+After commit:
+
+- `lockAcquired = false`
+- success audit is written
+- background timer is started
+
+### Step 11: background expiry timer
+
+`go s.scheduleReservationUnlock(booking.ID)`
+
+This timer:
+
+1. waits for `reservationTTL`
+2. in a new transaction:
+   - cancels the booking if it is still expired + reserved
+   - decrements `events.reserved_slots`
+
+It is idempotent:
+
+- if user already confirmed, no change
+- if user already cancelled, no change
+- if lazy cleanup already ran, no change
 
 ---
 
-## Step 3: After commit — audit and background unlock
+## Confirm Logic
 
-### Success audit
+Confirm is stricter than reserve because it validates both DB state and Redis ownership.
 
-`writeAudit` with **SUCCESS**, `entityId` = booking id, metadata includes `bookingId`, `eventId`.
+### Step 1: load booking
 
-### `scheduleReservationUnlock(bookingID)` (goroutine)
+`bookingRepo.GetByID()` uses:
 
-- Waits **`reservationTTL`** (same idea as Redis key lifetime).
-- In a **new** transaction:
-  1. **`CancelReservationIfExpired`** — `UPDATE bookings` to `CANCELLED` **only if** still `RESERVED` and `expires_at <= NOW()`, returning `event_id` and `quantity`.
-  2. If a row was updated, **`ReleaseReservedSlots`** for that quantity.
+```sql
+SELECT ...
+FROM bookings
+WHERE id = $1
+FOR UPDATE
+```
 
-**Idempotent:** If the user **Confirmed**, the row is no longer `RESERVED` → step 1 updates **0** rows → no inventory change. If **Cancel** or **batch** `CancelExpiredReservations` already ran, same.
+This locks the booking row for the current transaction / request.
 
----
+### Step 2: validate owner
 
-## How Confirm reuses the same Redis key/value
+If `booking.UserID != userID`:
+
+- audit failure
+- return `ErrUnauthorized`
+
+### Step 3: validate lifecycle state
+
+If booking is not `RESERVED`:
+
+- audit failure
+- return `ErrConflict`
+
+### Step 4: rebuild and verify Redis ownership
 
 Confirm rebuilds:
 
-- **Key:** `reservation:<eventID>:<userID>` (from booking).
-- **Expected value:** `reservationLockValue(booking.Quantity, bookingID)` — must **exactly match** `GET reservation:...`.
+- key: `reservation:<eventID>:<userID>`
+- expected value: `<quantity>|<bookingID>`
 
-So the lock proves:
+Then it calls `GetOwner()` on Redis.
 
-1. The reservation window is still active (key exists), and  
-2. The client is confirming the **same** booking id and quantity that created the lock.
+If the returned value does not exactly match:
 
----
+- audit failure
+- return `ErrTicketUnavailable`
 
-## End-to-end ordering (reference)
+This usually means:
 
-```text
-1. Generate bookingID
-2. Redis SETNX reservation:<eventId>:<userId> = "<qty>|<bookingId>" TTL=reservationTTL
-3. BEGIN
-4. CancelExpiredReservations (bookings + events counters)
-5. TryAddReservedSlots
-6. HasActiveReservedBookingForUserEvent → if true, ReleaseReservedSlots + abort
-7. INSERT booking
-8. COMMIT
-9. Clear defer so Redis key is NOT deleted
-10. Audit success; start timer goroutine for DB-side expiry cleanup
+- TTL expired
+- lock already released
+- wrong booking/quantity was presented
+
+### Step 5: confirm in DB
+
+Inside a transaction:
+
+1. `ConfirmReservation(bookingID)` updates booking to `CONFIRMED` only when it is still `RESERVED`
+2. `TransferReservedToBooked(eventID, quantity)` moves seats from reserved to booked
+
+Transfer SQL:
+
+```sql
+UPDATE events e
+SET reserved_slots = e.reserved_slots - $2,
+    booked_slots = e.booked_slots + $2
+WHERE e.id = $1::uuid
+  AND e.reserved_slots >= $2
 ```
 
-On any failure before step 9, transaction rolls back and defer **releases** Redis so the user can try again.
+If booking state changed concurrently, confirm fails with `ErrConflict`.
+
+### Step 6: release Redis lock
+
+After DB success, the service releases Redis using the guarded Lua delete.
+
+### Step 7: audit success
+
+Confirm writes `BOOKING_CONFIRMED / SUCCESS`.
 
 ---
 
-## Design notes
+## Cancel / Return Logic
 
-- **Redis** = fast per-user mutex + **proof of possession** for confirm; it does **not** store inventory counts.
-- **Postgres** = source of truth for **capacity** (`events` counters + `venues.capacity`) and **booking rows**.
-- **TTL alignment:** Redis expiry, `bookings.expires_at`, and `scheduleReservationUnlock` are all driven by the same configured **`reservationTTL`** so behaviour stays coherent.
+Cancel handles both reserved cancellations and confirmed ticket returns.
+
+### Step 1: load booking
+
+The service loads the booking and audits `not_found` if missing.
+
+### Step 2: validate owner and state
+
+- wrong user -> `ErrUnauthorized`
+- already cancelled -> `ErrConflict`
+
+### Step 3: transactional inventory release
+
+Inside a transaction:
+
+1. update booking status to `CANCELLED`
+2. if old state was `RESERVED`, run `ReleaseReservedSlots`
+3. if old state was `CONFIRMED`, run `ReleaseBookedSlots`
+
+Reserved release SQL:
+
+```sql
+UPDATE events
+SET reserved_slots = reserved_slots - $2
+WHERE id = $1::uuid
+  AND reserved_slots >= $2
+```
+
+Booked release SQL:
+
+```sql
+UPDATE events
+SET booked_slots = booked_slots - $2
+WHERE id = $1::uuid
+  AND booked_slots >= $2
+```
+
+### Step 4: release Redis lock for reserved bookings
+
+If the booking used to be `RESERVED`, the service also releases:
+
+```text
+reservation:<eventID>:<userID>
+```
+
+using the expected value `<quantity>|<bookingID>`.
+
+Confirmed bookings do not rely on Redis anymore, so no lock release is needed there.
+
+### Step 5: audit success
+
+Cancel writes `BOOKING_CANCELLED / SUCCESS`.
+
+---
+
+## Lazy Cleanup Logic
+
+The service also calls `CancelExpiredReservations()` from:
+
+- reserve
+- get my bookings
+
+That means even if the timer path is lost because the app restarts, future traffic still cleans old expired holds.
+
+This is a pragmatic design, but it is not a perfect durable scheduler.
+
+---
+
+## Audit Logic
+
+Audit is written outside the DB transaction for the business operation.
+
+Why:
+
+- failure logs survive business rollback
+- operational visibility is favored over strict transactional coupling
+
+What gets logged:
+
+- booking created success/failure
+- booking confirmed success/failure
+- booking cancelled success/failure
+
+Common metadata:
+
+- `eventId`
+- `bookingId`
+- `reason`
+- `status`
+- `max`
+
+Pain point:
+
+- metadata is free-form JSON, so analytics queries are possible but not ideal
+
+---
+
+## Pain Points At Scale
+
+### 1. Hot event row contention
+
+Every reserve, confirm, cancel, and expiry cleanup for one event touches the same `events` row.
+
+Impact:
+
+- hot events serialize on one row
+- latency increases under spikes
+- throughput drops for blockbuster events
+
+### 2. In-process expiry timer
+
+`scheduleReservationUnlock()` is a goroutine inside the app process.
+
+Impact:
+
+- app restart loses scheduled timers
+- cleanup still eventually happens because of lazy cleanup, but not immediately
+
+### 3. Redis is a reservation ownership helper, not a durable workflow engine
+
+If Redis is unavailable:
+
+- reserve and confirm cannot proceed
+
+Impact:
+
+- short Redis issues affect booking flows directly
+
+### 4. No seat-level model
+
+The system reserves quantities only.
+
+Impact:
+
+- cannot implement exact seat selection without redesign
+- cannot handle per-seat adjacency rules
+
+### 5. Audit schema is flexible but weakly structured
+
+Impact:
+
+- good for debugging
+- less ideal for large-scale compliance analytics or BI
+
+### 6. Capacity lookup still joins `venues`
+
+Reserve uses `FROM venues v` on the hot path.
+
+Impact:
+
+- join cost is usually modest compared to lock contention
+- still an extra dependency in the hottest update
+
+### 7. One active reservation per user/event is enforced in app logic, not a partial unique index
+
+Impact:
+
+- logic is correct today, but relies on reserve flow discipline
+
+---
+
+## How To Scale To A Million Users
+
+The current design is good for a small service or demo, but not the final shape for very high concurrency. A path toward much larger scale would look like this:
+
+### 1. Separate "active inventory" from the main `events` row
+
+Instead of updating one hot `events` row, introduce a dedicated inventory model:
+
+- `event_inventory` table
+- or sharded inventory buckets per event
+
+Goal:
+
+- spread writes across multiple rows
+- reduce hot-row queueing
+
+### 2. Replace in-process expiry timers with durable cleanup
+
+Better options:
+
+- a DB-backed scheduler
+- a queue with delayed jobs
+- a periodic worker scanning expired reservations
+
+Goal:
+
+- expiry survives pod restarts and rolling deploys
+
+### 3. Treat Redis as optional acceleration, not the only proof source
+
+Today confirm depends on Redis lock ownership.
+
+At larger scale you may want:
+
+- a durable reservation token in DB
+- or a signed reservation token
+- or both Redis and DB proof
+
+Goal:
+
+- avoid hard dependency on one cache for correctness of confirm ownership
+
+### 4. Add seat-level modeling only if product needs it
+
+If exact seat selection is required:
+
+- create a `seats` table
+- create per-seat reservation state
+- move from quantity-based inventory to seat-based inventory
+
+Goal:
+
+- support explicit seat maps and precise locking
+
+### 5. Improve audit structure
+
+Add:
+
+- stable failure codes
+- request IDs
+- actor/device/session info
+- typed metadata fields
+
+Goal:
+
+- stronger observability and compliance
+
+### 6. Consider a command/event workflow for blockbuster traffic
+
+For extremely hot events:
+
+- accept reserve requests
+- push them into a queue / partitioned stream
+- have inventory workers process them deterministically
+
+Goal:
+
+- keep correctness while smoothing bursts
+
+Trade-off:
+
+- more operational complexity
+- more asynchronous behavior for clients
+
+### 7. Cache read-heavy endpoints separately
+
+`GET /events` can be cached aggressively because it is read-heavy and its payload is compact.
+
+Goal:
+
+- protect DB from read spikes while the write path remains authoritative
+
+---
+
+## Summary
+
+Today’s design is a good intermediate architecture:
+
+- simpler than seat-level locking
+- safer than recomputing counts with `SUM(bookings)` on every write
+- expressive enough for reserve/confirm/cancel
+
+Its main future pain points are:
+
+- hot-row contention on `events`
+- non-durable in-process expiry timers
+- quantity-only inventory
+
+For the broader codebase structure, see `ARCHITECTURE.md`. For the design rationale and assumptions, see `design.md`.

@@ -1,412 +1,94 @@
 # Architecture
 
-## Table of Contents
-
-1. [High-Level Design](#1-high-level-design)
-2. [Directory Structure](#2-directory-structure)
-3. [Data Model](#3-data-model)
-4. [Entities](#4-entities)
-5. [Ports and Services](#5-ports-and-services)
-6. [PostgreSQL Responsibilities](#6-postgresql-responsibilities)
-7. [Redis Responsibilities](#7-redis-responsibilities)
-8. [Booking Flow](#8-booking-flow)
-9. [Concurrency and Consistency](#9-concurrency-and-consistency)
-10. [HTTP and Frontend](#10-http-and-frontend)
-11. [Transactions and Audit Isolation](#11-transactions-and-audit-isolation)
-12. [Key Assumptions and Trade-offs](#12-key-assumptions-and-trade-offs)
+This document describes the current code structure and the runtime architecture as it exists today.
 
 ---
 
-## 1. High-Level Design
+## High-Level Shape
 
-The codebase follows a simple ports-and-adapters structure:
+The project follows a lightweight ports-and-adapters style:
 
-- `cmd/server` exposes the HTTP API with Gin.
-- `internal/service` contains the business logic.
-- `internal/ports` defines the interfaces the service layer depends on.
-- `internal/adapters/postgres` and `internal/adapters/redis` implement those interfaces.
+- `cmd/server` exposes the HTTP API and serves the static frontend.
+- `internal/service` contains booking, event, and user use cases.
+- `internal/ports` defines interfaces used by the service layer.
+- `internal/infra/postgres` implements repositories and transaction handling.
+- `internal/infra/redis` implements reservation lock storage.
 
-The key architectural decision is this:
+The important architectural decision is:
 
-> Reservations are modeled at the booking level.
-
-That means:
-
-- the system reserves a **quantity** for an event,
-- the durable record lives in `bookings`,
-- the temporary hold lives in Redis,
-- and there is no seat-selection flow in the application layer.
-
-Booking state is handled through `bookings` and Redis reservation locks.
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                         HTTP Layer                           │
-│                 cmd/server (Gin handlers)                    │
-└─────────────────────────────┬────────────────────────────────┘
-                              │
-┌─────────────────────────────▼────────────────────────────────┐
-│                        Service Layer                         │
-│        booking_service / event_service / user_service        │
-└───────────────┬──────────────────────┬───────────────────────┘
-                │                      │
-                │                      │
-        ┌───────▼────────┐      ┌──────▼─────────┐
-        │   PostgreSQL   │      │     Redis      │
-        │ repos + tx     │      │ reservation    │
-        │                │      │ lock manager   │
-        └────────────────┘      └────────────────┘
-```
+> Inventory is tracked on the `events` row with counters, while Redis only tracks temporary reservation ownership.
 
 ---
 
-## 2. Directory Structure
+## Directory Structure
 
-```
+```text
 event-ticket/
 ├── cmd/
 │   └── server/
-│       ├── main.go
-│       ├── router.go
-│       ├── middleware.go
-│       ├── response.go
-│       ├── booking_handler.go
-│       ├── event_handler.go
-│       └── user_handler.go
-│
+│       ├── container.go
+│       ├── frontend/
+│       │   ├── app.js
+│       │   ├── index.html
+│       │   ├── paths.go
+│       │   └── styles.css
+│       ├── handler/
+│       │   ├── booking_handler.go
+│       │   ├── event_handler.go
+│       │   ├── response.go
+│       │   ├── router.go
+│       │   └── user_handler.go
+│       └── main.go
 ├── internal/
-│   ├── adapters/
-│   │   ├── postgres/
-│   │   │   ├── db.go
-│   │   │   ├── tx.go
-│   │   │   ├── event_repo.go
-│   │   │   ├── booking_repo.go
-│   │   │   ├── audit_repo.go
-│   │   │   └── user_repo.go
-│   │   └── redis/
-│   │       ├── client.go
-│   │       └── lock_manager.go
-│   │
 │   ├── config/
-│   │   └── config.go
-│   │
 │   ├── entities/
-│   │   ├── audit.go
-│   │   ├── booking.go
-│   │   ├── event.go
-│   │   ├── errors.go
-│   │   └── user.go
-│   │
+│   ├── infra/
+│   │   ├── postgres/
+│   │   └── redis/
+│   ├── middleware/
 │   ├── ports/
-│   │   ├── cache.go
-│   │   ├── repository.go
-│   │   └── service.go
-│   │
 │   └── service/
-│       ├── booking_service.go
-│       ├── event_service.go
-│       └── user_service.go
-│
 ├── migrations/
-│   ├── 001_init.sql
-│   └── 002_seed.sql
-│
-└── frontend/
-    ├── index.html
-    ├── styles.css
-    └── app.js
+├── specs/
+├── Dockerfile
+└── docker-compose.yml
 ```
 
 ---
 
-## 3. Data Model
+## Runtime Components
 
-### `users`
+### HTTP layer
 
-Stores the available users for the demo flow. Authentication is simplified; callers pass the user ID in the `X-User-ID` header.
+Gin exposes these routes:
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | primary key, DB-generated |
-| name | VARCHAR | display name |
-| email | VARCHAR | unique |
-| created_at | TIMESTAMPTZ | creation timestamp |
+- `GET /`
+- `GET /styles.css`
+- `GET /app.js`
+- `GET /health`
+- `GET /events`
+- `GET /users`
+- `POST /booking/reserve`
+- `POST /booking/confirm`
+- `DELETE /booking/:bookingId`
+- `GET /booking/mine`
 
-### `venues`
+`cmd/server/frontend.ResolveDir()` locates static frontend files either from:
 
-Venue metadata plus optional `seat_map`.
+- `FRONTEND_DIR`, or
+- the repo tree (`cmd/server/frontend`)
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | primary key |
-| name | VARCHAR | |
-| address | TEXT | |
-| capacity | INT | venue-level capacity |
-| seat_map | JSONB | optional |
-| created_at | TIMESTAMPTZ | |
+### Service layer
 
-### `events`
+Services are thin for reads and fuller for bookings:
 
-Capacity for reservation checks comes from the event's venue.
+- `eventService` delegates to `EventRepository.List`
+- `userService` delegates to `UserRepository.List`
+- `bookingService` owns reserve, confirm, cancel, cleanup coordination, and audit writing
 
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | primary key |
-| name | VARCHAR | |
-| description | TEXT | |
-| date_time | TIMESTAMPTZ | event time |
-| venue_id | UUID | FK → `venues` |
-| created_at | TIMESTAMPTZ | |
+### PostgreSQL layer
 
-Index:
-
-- `idx_events_date_time`
-
-### `bookings`
-
-This is now the main business table.
-
-A booking represents:
-
-- one user,
-- one event,
-- one quantity,
-- one lifecycle: `RESERVED` → `CONFIRMED` or `CANCELLED`.
-
-`quantity` stores the number of seats covered by the booking.
-
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | primary key, DB-generated |
-| user_id | UUID | FK → `users` |
-| event_id | UUID | FK → `events` |
-| status | VARCHAR | `RESERVED`, `CONFIRMED`, `CANCELLED` |
-| expires_at | TIMESTAMPTZ | reservation expiry time |
-| created_at | TIMESTAMPTZ | |
-| updated_at | TIMESTAMPTZ | |
-| quantity | INT | seat count for the booking |
-
-Indexes:
-
-- `idx_bookings_user_id`
-- `idx_bookings_event_id`
-- `idx_bookings_status`
-
-### `audit_logs`
-
-Audit rows are append-only and intentionally written outside the booking transaction.
-
-`quantity` stores the number of seats associated with the audited action when applicable.
-
-| Column | Type | Notes |
-|--------|------|-------|
-| id | UUID | primary key, DB-generated |
-| entity_type | VARCHAR | always `"booking"` today |
-| entity_id | VARCHAR | booking ID, or empty string for pre-create failures |
-| action | VARCHAR | `BOOKING_CREATED`, `BOOKING_CONFIRMED`, `BOOKING_CANCELLED` |
-| user_id | VARCHAR | acting user |
-| outcome | VARCHAR | `SUCCESS` or `FAILURE` |
-| quantity | INT | nullable |
-| metadata | JSONB | contextual details like `eventId`, `bookingId`, reason |
-| created_at | TIMESTAMPTZ | |
-
-Indexes:
-
-- `idx_audit_logs_entity`
-- `idx_audit_logs_user_id`
-- `idx_audit_logs_created_at`
-
----
-
-## 4. Entities
-
-Entities live in `internal/entities` and are simple transport types shared across layers.
-
-### `Event`
-
-```go
-type Event struct {
-    ID              string
-    Name            string
-    Description     string
-    DateTime        time.Time
-    Venue           Venue
-    AvailableCount  int
-    CreatedAt       time.Time
-}
-```
-
-Capacity comes from `Venue.Capacity`. `AvailableCount` is computed in SQL as:
-
-```sql
-v.capacity - COALESCE(SUM(b.quantity), 0)
-```
-
-where the sum only includes:
-
-- `CONFIRMED` bookings
-- `RESERVED` bookings whose `expires_at > NOW()`
-
-### `Booking`
-
-```go
-type Booking struct {
-    ID         string
-    UserID     string
-    EventID    string
-    Quantity   int
-    Status     BookingStatus
-    ExpiresAt  *time.Time
-    CreatedAt  time.Time
-    UpdatedAt  time.Time
-}
-```
-
-Important detail:
-
-- booking IDs are generated by PostgreSQL on insert (`RETURNING id`)
-- not by the service layer
-
-### `AuditLog`
-
-```go
-type AuditLog struct {
-    ID         string
-    EntityType string
-    EntityID   string
-    Action     AuditAction
-    UserID     string
-    Outcome    AuditOutcome
-    Quantity   *int
-    Metadata   json.RawMessage
-    CreatedAt  time.Time
-}
-```
-
-Although `AuditLog` has an `ID` field, the repository insert does not send it. PostgreSQL generates the primary key.
-
-### `User`, `Venue`
-
-These remain straightforward data holders with no special behavior.
-
-### Sentinel Errors
-
-```go
-var (
-    ErrNotFound
-    ErrTicketUnavailable
-    ErrUnauthorized
-    ErrConflict
-)
-```
-
-`ErrTicketUnavailable` is the public error returned when there is not enough capacity or when a reservation lock is missing or expired.
-
----
-
-## 5. Ports and Services
-
-### Repository ports
-
-#### `EventRepository`
-
-```text
-List(ctx)
-LockEventCapacity(ctx, eventID)
-```
-
-Purpose:
-
-- event reads,
-- row-level locking of the event during reserve.
-
-#### `BookingRepository`
-
-```text
-Create(ctx, booking)
-GetByID(ctx, id)
-GetByUserID(ctx, userID)
-UpdateStatus(ctx, bookingID, status)
-ConfirmReservation(ctx, bookingID)
-CancelExpiredReservations(ctx)
-SumAllocatedQuantityForEvent(ctx, eventID)
-HasActiveReservedBookingForUserEvent(ctx, userID, eventID)
-```
-
-These methods support the booking workflow:
-
-- `Create` inserts without sending `id` and scans the DB-generated ID back into the struct.
-- `ConfirmReservation` updates only when the row is still `RESERVED`.
-- `SumAllocatedQuantityForEvent` is the core availability query.
-- `HasActiveReservedBookingForUserEvent` prevents multiple active reservations by the same user for the same event.
-
-#### `AuditRepository`
-
-```text
-Log(ctx, entry)
-```
-
-The audit repo writes directly with `*sql.DB`, not with transaction-aware `exec(ctx)`.
-
-#### `UserRepository`
-
-```text
-List(ctx)
-GetByID(ctx, id)
-```
-
-### Other ports
-
-#### `LockManager`
-
-```text
-Acquire(ctx, key, value, ttl)
-Release(ctx, key, value)
-GetOwner(ctx, key)
-```
-
-#### `Transactor`
-
-```text
-WithTransaction(ctx, fn)
-```
-
-### Services
-
-#### `BookingService`
-
-This service owns the full reservation lifecycle:
-
-- reserve capacity,
-- create booking rows,
-- coordinate Redis locks,
-- confirm,
-- cancel,
-- write audit rows.
-
-It depends on:
-
-- `BookingRepository`
-- `EventRepository`
-- `AuditRepository`
-- `LockManager`
-- `Transactor`
-
-#### `EventService`
-
-`EventService` is thin:
-
-- `ListEvents` delegates to `eventRepo.List`
-
-#### `UserService`
-
-Used only to populate the frontend user selector.
-
----
-
-## 6. PostgreSQL Responsibilities
-
-PostgreSQL is the durable system of record for:
+PostgreSQL stores:
 
 - users
 - venues
@@ -414,294 +96,343 @@ PostgreSQL is the durable system of record for:
 - bookings
 - audit logs
 
-Booking semantics in PostgreSQL:
+It also enforces inventory changes through atomic updates on `events`.
 
-- `bookings` holds the reserved quantity
-- `bookings.status` holds the lifecycle state
-- `bookings.expires_at` defines whether a reservation is still active
-- capacity checks are based on booking quantities
+### Redis layer
 
-### Available count query
+Redis stores only the short-lived reservation lock:
 
-`List` in `event_repo.go` computes availability like this:
+- key: `reservation:<eventID>:<userID>`
+- value: `<quantity>|<bookingID>`
+
+---
+
+## Data Model
+
+### `users`
+
+Simplified demo identities. The caller passes one of these IDs in `X-User-ID`.
+
+### `venues`
+
+Static venue metadata plus `capacity`. Capacity is authoritative here.
+
+### `events`
+
+`events` is now the main inventory row.
+
+Columns of interest:
+
+- `venue_id`
+- `booked_slots`
+- `reserved_slots`
+- `date_time`
+
+Important constraints / indexes:
+
+- `CHECK (booked_slots >= 0)`
+- `CHECK (reserved_slots >= 0)`
+- `idx_events_date_time`
+- `idx_events_venue_id`
+- `idx_events_venue_id_date_time` unique index
+
+### `bookings`
+
+Each booking has:
+
+- `user_id`
+- `event_id`
+- `quantity`
+- `status`
+- `expires_at`
+- `created_at`
+- `updated_at`
+
+Statuses:
+
+- `RESERVED`
+- `CONFIRMED`
+- `CANCELLED`
+
+### `audit_logs`
+
+Append-only rows with:
+
+- `entity_type`
+- `entity_id`
+- `action`
+- `user_id`
+- `outcome`
+- `quantity`
+- `metadata`
+- `created_at`
+
+`metadata` is `JSON`, not `JSONB`.
+
+---
+
+## Inventory Model
+
+The system no longer computes capacity by summing bookings on every request.
+
+Current model:
+
+```text
+available = venues.capacity - events.booked_slots - events.reserved_slots
+```
+
+Meaning:
+
+- `booked_slots` = confirmed purchased seats
+- `reserved_slots` = seats currently held but not yet confirmed
+
+Event listing uses:
 
 ```sql
-v.capacity - COALESCE((
-    SELECT SUM(b.quantity)
-    FROM bookings b
-    WHERE b.event_id = e.id
-      AND (
-        b.status = 'CONFIRMED'
-        OR (b.status = 'RESERVED' AND b.expires_at > NOW())
-      )
-), 0)
+SELECT e.id, e.name, e.description, e.date_time,
+       GREATEST(v.capacity - e.booked_slots - e.reserved_slots, 0),
+       ...
+FROM events e
+INNER JOIN venues v ON v.id = e.venue_id
+WHERE e.date_time > NOW()
+ORDER BY e.date_time ASC
 ```
 
-(where `v` is the venue joined to the event)
+---
 
-This is the definition of “available”.
+## Redis Responsibilities
 
-## 7. Redis Responsibilities
+Redis is intentionally small in scope.
 
-Redis stores the temporary reservation lock only.
+### Acquire
 
-### Key strategy
-
-The key format is:
+Reserve uses:
 
 ```text
-reservation:{eventID}:{userID}
+SET key value NX EX ttl
 ```
 
-This preserves the required `event_id:user_id` combination in the key.
+via `SetNX`.
 
-### Value strategy
+### Release
 
-The value format is:
+Confirm and cancel use a guarded Lua delete:
 
-```text
-userID|quantity|bookingID
+```lua
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+else
+    return 0
+end
 ```
 
-This lets the service verify that the lock still belongs to:
+This avoids deleting a lock unless the expected value still matches.
 
-- the same user,
-- the same quantity,
-- the same booking.
+### Read owner
 
-### Operations
+Confirm uses `GET` through `GetOwner()` and compares the exact value.
 
-| Operation | Redis primitive | Used in |
-|----------|------------------|---------|
-| Acquire | `SET key value NX EX ttl` | reserve |
-| Release | Lua guarded delete | confirm / cancel |
-| GetOwner | `GET key` | confirm |
-
-The guarded release script ensures a caller only deletes its own lock.
-
-### What Redis does not do
+### What Redis does not own
 
 Redis does not store:
 
-- the durable reservation record,
-- final booking status,
-- venue capacity,
-- audit history.
-
-If the lock expires, Redis silently drops the key. The durable cleanup of the matching booking row happens lazily on later requests via `CancelExpiredReservations()`.
+- final booking state
+- capacity
+- durable booking records
+- audit history
 
 ---
 
-## 8. Booking Flow
+## Repository Ports
+
+### `EventRepository`
+
+- `List`
+- `TryAddReservedSlots`
+- `TransferReservedToBooked`
+- `ReleaseReservedSlots`
+- `ReleaseBookedSlots`
+
+### `BookingRepository`
+
+- `Create`
+- `GetByID`
+- `GetByUserID`
+- `UpdateStatus`
+- `ConfirmReservation`
+- `CancelExpiredReservations`
+- `CancelReservationIfExpired`
+- `HasActiveReservedBookingForUserEvent`
+
+### Other ports
+
+- `AuditRepository.Log`
+- `UserRepository.List`
+- `Transactor.WithTransaction`
+- `LockManager.Acquire / Release / GetOwner`
+
+---
+
+## Transaction Model
+
+`internal/infra/postgres/tx.go` stores `*sql.Tx` in the request context. Repository methods call `execFromContext()` and transparently use either:
+
+- the transaction, or
+- the shared DB pool
+
+This keeps repository methods reusable without creating duplicate `Tx` and non-`Tx` versions.
+
+---
+
+## Booking Workflows
 
 ### Reserve
 
-`BookingService.Reserve(ctx, userID, eventID, quantity)` works like this:
+Reserve combines Redis and PostgreSQL:
 
-1. Normalize `quantity` to at least `1`.
-2. Run lazy cleanup of expired reservations.
-3. Generate a booking ID and acquire the Redis lock on `reservation:{eventID}:{userID}`.
-4. If Redis acquisition fails or the key already exists, return (no DB work).
-5. Start a DB transaction. On any failure, release the Redis lock and return.
-6. Inside the transaction:
-   - clean up expired reservations again,
-   - lock the event row with `FOR UPDATE`,
-   - sum currently allocated quantity,
-   - reject if remaining capacity is insufficient,
-   - reject if the same user already has an active `RESERVED` booking for the event,
-   - insert a new booking row with the pre-generated ID.
-7. Write the audit row.
+1. Validate `quantity` (`<= 0` becomes `1`; too large returns `ErrInvalidQuantity`).
+2. Generate a booking UUID in the service.
+3. Acquire Redis lock for `(eventID, userID)`.
+4. Start DB transaction.
+5. Run `CancelExpiredReservations()`.
+6. Run `TryAddReservedSlots()`.
+7. Reject if same user already has an active reservation for the same event.
+8. Insert booking row as `RESERVED`.
+9. Commit.
+10. Keep Redis lock alive.
+11. Write success audit.
+12. Start in-process timer cleanup.
 
 ### Confirm
 
-`BookingService.Confirm(ctx, userID, bookingID)`:
-
-1. Load the booking with `FOR UPDATE`.
-2. Validate ownership.
-3. Validate status is `RESERVED`.
-4. Rebuild the expected Redis key and value.
-5. Verify `GetOwner()` exactly matches the expected lock value.
-6. Run a transaction calling `ConfirmReservation()`:
-   - `UPDATE bookings ... WHERE id = $1 AND status = 'RESERVED'`
-   - if `RowsAffected() == 0`, return `ErrConflict`
-7. Release the Redis lock.
-8. Write the audit row with `quantity`.
+1. Load booking with `FOR UPDATE`.
+2. Validate owner and state.
+3. Check Redis owner value.
+4. In one transaction:
+   - `ConfirmReservation()`
+   - `TransferReservedToBooked()`
+5. Release Redis lock.
+6. Write audit.
 
 ### Cancel
 
-`BookingService.Cancel(ctx, userID, bookingID)`:
+1. Load booking.
+2. Validate owner and state.
+3. In one transaction:
+   - mark booking `CANCELLED`
+   - release `reserved_slots` if it was reserved
+   - release `booked_slots` if it was confirmed
+4. If it was reserved, release Redis key.
+5. Write audit.
 
-1. Load the booking.
-2. Validate ownership.
-3. Reject already-cancelled bookings.
-4. Update status to `CANCELLED` in a transaction.
-5. If the booking was still `RESERVED`, release the Redis lock.
-6. Write the audit row.
+### Expiry cleanup
 
-### Get user bookings
+There are two cleanup paths:
 
-`BookingService.GetUserBookings(ctx, userID)`:
+- batch lazy cleanup through `CancelExpiredReservations()`
+- single-booking timer cleanup through `scheduleReservationUnlock()`
 
-1. Lazy-clean expired reservations.
-2. Load the user's `RESERVED` and `CONFIRMED` bookings.
-3. Clear `ExpiresAt` on non-reserved rows before returning them.
+Both ensure expired reservations release `reserved_slots`.
 
 ---
 
-## 9. Concurrency and Consistency
+## Consistency Guarantees
 
-### Capacity race protection
+### Same user, same event
 
-The critical race during reserve is protected by:
+Redis prevents concurrent reserve attempts for the same `(eventID, userID)` pair.
 
-1. **Redis lock first** — Acquiring the lock on `reservation:{eventID}:{userID}` before the DB transaction serializes same-user concurrent reservations for the same event. A second request from the same user fails at Redis and never touches the DB.
+### Cross-user capacity
 
-2. **Event row lock** — Inside the transaction, locking the event row with `FOR UPDATE` serializes capacity checks and booking inserts across all users:
+The DB protects capacity with conditional atomic updates on `events`.
+
+Reserve succeeds only if:
 
 ```sql
-SELECT capacity FROM events WHERE id = $1 FOR UPDATE
+booked_slots + reserved_slots + quantity <= venues.capacity
 ```
 
-### Confirm race protection
+### Confirm correctness
 
-The critical race during confirm is protected by:
+Confirm requires:
 
-- loading the booking row with `FOR UPDATE`,
-- and `ConfirmReservation()` updating only rows still in `RESERVED`.
+- the booking row still be `RESERVED`
+- the Redis key still exist
+- the Redis value still match the expected `quantity|bookingID`
 
-That means two concurrent confirm requests cannot both succeed.
+### Counter reconciliation
 
-### Redis lock purpose
+Expired cleanup uses:
 
-The Redis lock is not a global event mutex. It protects the user’s active reservation for that event and acts as the expiration mechanism for the temporary hold.
-
-### Lazy cleanup consistency model
-
-Expired `RESERVED` rows are not removed by a worker. They are transitioned to `CANCELLED` lazily when calls like reserve or “my bookings” happen.
-
-This means:
-
-- Redis expiry frees the temporary hold immediately,
-- PostgreSQL may temporarily still contain a stale `RESERVED` row,
-- but the availability query only subtracts rows whose `expires_at > NOW()`,
-- so stale expired rows do not reduce available capacity.
-
----
-
-## 10. HTTP and Frontend
-
-### Routes
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/` | serve frontend (index.html) |
-| GET | `/styles.css` | frontend styles |
-| GET | `/app.js` | frontend script |
-| GET | `/health` | health check |
-| GET | `/events` | list events |
-| POST | `/booking/reserve` | reserve quantity for an event |
-| POST | `/booking/confirm` | confirm a booking |
-| DELETE | `/booking/:bookingId` | cancel a booking |
-| GET | `/booking/mine` | list current user bookings |
-| GET | `/users` | list demo users |
-
-### Auth model
-
-Authentication is intentionally simplified:
-
-- no JWT
-- no session
-- `X-User-ID` header is trusted directly
-
-### Error mapping
-
-`response.go` maps service errors to:
-
-```text
-ErrNotFound          -> 404
-ErrTicketUnavailable -> 409
-ErrUnauthorized      -> 403
-ErrConflict          -> 409
-default              -> 500
+```sql
+SET reserved_slots = GREATEST(e.reserved_slots - a.sub, 0)
 ```
 
-### Frontend
-
-The server serves the frontend at `GET /`. Static assets:
-
-- `GET /` → `index.html`
-- `GET /styles.css` → styles
-- `GET /app.js` → script
-
-Source files live in `frontend/`. At startup the server walks up from the process working directory until it finds `frontend/index.html`, so `go run .` works from the repo root or from `cmd/server`. Set `FRONTEND_DIR` to an absolute path to override.
-
-The UI supports:
-
-- selecting a user,
-- browsing events,
-- reserving a quantity,
-- viewing active bookings,
-- confirming or cancelling bookings,
-- showing countdowns for reserved bookings.
-
-When served from the same origin, the frontend uses `window.location.origin` for API calls.
+This is intentionally self-healing if counters drift low.
 
 ---
 
-## 11. Transactions and Audit Isolation
+## Audit Isolation
 
-### Transaction pattern
+`auditRepo` writes with the root DB handle, not the transaction-bound executor.
 
-`internal/adapters/postgres/tx.go` stores `*sql.Tx` in context so repositories can transparently use either:
+Why:
 
-- the transaction in progress, or
-- the shared DB pool.
+- failure audits should survive rollback
+- business flow and operational logging are intentionally decoupled
 
-This keeps repository methods reusable both inside and outside transactions.
+Trade-off:
 
-### Audit isolation
-
-`auditRepo` deliberately bypasses the transaction-aware executor and always writes with the root `*sql.DB`.
-
-That means:
-
-- failure audit rows survive booking rollbacks,
-- success and failure auditing remain independent of business transaction success,
-- audit completeness is favored over strict transactional coupling.
-
-### ID generation
-
-Both primary-key inserts are DB-generated:
-
-- `bookings.id` is generated by PostgreSQL and returned with `RETURNING id`
-- `audit_logs.id` is generated by PostgreSQL by default
-
-The service layer does not create those IDs ahead of time.
+- audit rows are not part of the same atomic transaction as the business update
 
 ---
 
-## 12. Key Assumptions and Trade-offs
+## Error Mapping
 
-### 1. Booking is the reservation unit
+Current HTTP error mapping:
 
-The system reserves quantities, not explicit seats. This simplifies the flow but means seat-level assignment is not part of the application model.
+- `ErrNotFound` -> `404`
+- `ErrInvalidQuantity` -> `400`
+- `ErrInsufficientCapacity` -> `409`
+- `ErrTicketUnavailable` -> `409`
+- `ErrUnauthorized` -> `403`
+- `ErrConflict` -> `409`
+- fallback -> `500`
 
-### 2. One active reservation per user per event
+---
 
-The service explicitly prevents a user from creating multiple simultaneous `RESERVED` bookings for the same event.
+## Static Frontend
 
-### 3. Redis is single-instance locking
+The frontend lives in `cmd/server/frontend`.
 
-The implementation assumes one Redis instance. There is no distributed multi-node lock protocol here.
+- local dev resolves that directory from the repo tree
+- Docker copies only the static assets into `/frontend`
 
-### 4. No payment processing
+The UI uses the same origin when served from the API server and interacts with:
 
-`paymentDetails` is accepted by the confirm request shape, but it is not used in the service layer.
+- `/events`
+- `/users`
+- `/booking/reserve`
+- `/booking/confirm`
+- `/booking/mine`
+- `/booking/:bookingId`
 
-### 5. Availability is computed from bookings
+---
 
-The authoritative availability model is:
+## Key Trade-offs
 
-- venue capacity (from the event's venue)
-- minus confirmed quantity
-- minus non-expired reserved quantity
+### What is strong
+
+- simple architecture
+- clear ownership split between Postgres and Redis
+- efficient event listing
+- correct inventory transitions under normal concurrency
+
+### What is weak
+
+- hot events still serialize on the same `events` row
+- expiry cleanup partly depends on in-process timers
+- no seat-level assignment
+- cancellation and return are represented by the same terminal state
+
+For the more narrative explanation of runtime behavior, see `design.md` and `reservelogic.md`.
