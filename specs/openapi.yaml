@@ -1,0 +1,413 @@
+openapi: 3.0.3
+info:
+  title: Event Ticket API
+  description: |
+    HTTP API for listing events and users, and for reserving, confirming, and cancelling bookings.
+    Authenticated calls use the `X-User-ID` header (demo identity; no JWT).
+  version: 1.0.0
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: /
+    description: Relative to the server base URL
+
+tags:
+  - name: Health
+    description: Process health
+  - name: Events
+    description: Event catalog and availability
+  - name: Bookings
+    description: Reservation lifecycle
+  - name: Users
+    description: Demo user directory
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+        "400":
+          description: Not returned by the current server (reserved for client compatibility)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+
+  /events:
+    get:
+      tags: [Events]
+      summary: List events with venues and available seat counts
+      operationId: listEvents
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventListResponse"
+        "400":
+          description: Not returned by the current server (reserved for client compatibility)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /users:
+    get:
+      tags: [Users]
+      summary: List users (demo picker)
+      operationId: listUsers
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserListResponse"
+        "400":
+          description: Not returned by the current server (reserved for client compatibility)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /booking/reserve:
+    post:
+      tags: [Bookings]
+      summary: Reserve tickets for an event
+      description: |
+        Acquires a short-lived reservation (Redis lock + DB row). Requires `X-User-ID`.
+      operationId: reserveBooking
+      security:
+        - DemoUserId: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReserveRequest"
+      responses:
+        "201":
+          description: Reservation created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Conflict or no capacity (lock held, duplicate active reservation, or sold out)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /booking/confirm:
+    post:
+      tags: [Bookings]
+      summary: Confirm a reserved booking
+      description: Requires a valid reservation lock matching the booking.
+      operationId: confirmBooking
+      security:
+        - DemoUserId: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmRequest"
+      responses:
+        "200":
+          description: Booking confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Not reserved, lock mismatch, or no capacity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorBody"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /booking/mine:
+    get:
+      tags: [Bookings]
+      summary: List current user's active bookings
+      operationId: getMyBookings
+      security:
+        - DemoUserId: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /booking/{bookingId}:
+    delete:
+      tags: [Bookings]
+      summary: Cancel a booking
+      operationId: cancelBooking
+      security:
+        - DemoUserId: []
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Cancelled
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    DemoUserId:
+      type: apiKey
+      in: header
+      name: X-User-ID
+      description: Demo user identity (UUID)
+
+  responses:
+    BadRequest:
+      description: Missing header or invalid JSON body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    Forbidden:
+      description: Caller is not the booking owner
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    Conflict:
+      description: Invalid state (e.g. already cancelled)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+    InternalError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorBody"
+
+  schemas:
+    ErrorBody:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable message
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+
+    Venue:
+      type: object
+      required: [id, name, address, capacity, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        address:
+          type: string
+        capacity:
+          type: integer
+          minimum: 0
+        seatMap:
+          description: Optional JSON payload from DB
+          type: object
+          additionalProperties: true
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    Event:
+      type: object
+      required: [id, name, dateTime, venue, availableCount, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        dateTime:
+          type: string
+          format: date-time
+        venue:
+          $ref: "#/components/schemas/Venue"
+        availableCount:
+          type: integer
+          minimum: 0
+          description: Remaining seats from venue capacity minus booked and reserved counters
+        createdAt:
+          type: string
+          format: date-time
+
+    EventListResponse:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/Event"
+
+    User:
+      type: object
+      required: [id, name, email, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        createdAt:
+          type: string
+          format: date-time
+
+    UserListResponse:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+
+    BookingStatus:
+      type: string
+      enum: [RESERVED, CONFIRMED, CANCELLED]
+
+    Booking:
+      type: object
+      required: [id, userId, eventId, quantity, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        eventId:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+        status:
+          $ref: "#/components/schemas/BookingStatus"
+        expiresAt:
+          type: string
+          format: date-time
+          description: Present only while status is RESERVED
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    BookingListResponse:
+      type: object
+      required: [bookings]
+      properties:
+        bookings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Booking"
+
+    ReserveRequest:
+      type: object
+      required: [eventId]
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+          default: 1
+          description: Omitted or non-positive values are treated as 1 by the server
+
+    ConfirmRequest:
+      type: object
+      required: [bookingId]
+      properties:
+        bookingId:
+          type: string
+          format: uuid
+        paymentDetails:
+          description: Accepted but not validated by the server (placeholder for future payment integration)
+          type: object
+          additionalProperties: true
+          nullable: true
