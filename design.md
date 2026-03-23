@@ -244,6 +244,44 @@ Impact:
 - App restart after reserve: in-process timer is lost, but later lazy cleanup can still cancel expired reservations.
 ---
 
+## How This Would Evolve Under High Scale
+
+### 1. Hot-event contention
+
+Today, one hot event means one hot `events` row.
+
+At larger scale:
+
+- split inventory into dedicated rows
+- or move booking admission through a queue/worker model
+
+### 2. Durable expiry handling
+
+Today, expiry is partly in-process.
+
+At larger scale:
+
+- move to a background worker, cron-like scanner, or delayed job queue
+
+### 3. Stronger client semantics
+
+Today, retries are handled by conflict checks.
+
+At larger scale:
+
+- add idempotency keys so duplicate client calls are safe and predictable
+
+### 4. Better observability
+
+Today, audit logs are good for debugging.
+
+At larger scale:
+
+- add stable failure codes
+- add metrics and dashboards for reserve/confirm/cancel outcomes
+
+---
+
 ## Summary
 
 The current design is a solid intermediate system:
