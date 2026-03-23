@@ -233,20 +233,7 @@ Impact:
 
 ---
 
-## Trade-offs
 
-| Decision | Reason | Impact |
-|---|---|---|
-| Event-level counters on `events` | Avoid repeated `SUM(bookings)` in the hot path | Faster inventory checks, but app logic must keep counters aligned |
-| Conditional inventory updates in PostgreSQL | Make capacity enforcement atomic and transactional | Correctness is strong, but hot events contend on one row |
-| Redis only for reservation ownership and TTL | Keep capacity correctness in one durable system | Simpler correctness model, but confirm depends on Redis availability |
-| In-process expiry timer after reserve | Easy way to reconcile DB state after TTL | Timers are lost on restart and need lazy cleanup backup |
-| No idempotency keys | Keep API simple for the assignment/demo | Client retries can still hit conflict-style errors instead of replay semantics |
-| Quantity-based booking instead of seat-based booking | Smaller model and easier flows | No exact seat selection, adjacency, or seat-map constraints |
-| Single `CANCELLED` state for reserve-cancel and post-confirm return | Simple lifecycle and simple counter release | Cannot distinguish refund/return business states yet |
-| Audit written outside transaction | Preserve failure logs on rollback | Audit and business updates are not one atomic unit |
-
----
 
 ## Edge Cases
 
@@ -257,71 +244,6 @@ Impact:
 - Cancel after confirm: booking becomes `CANCELLED` and `booked_slots` is released.
 - Cancel after reserve: booking becomes `CANCELLED`, `reserved_slots` is released, and Redis lock is deleted.
 - App restart after reserve: in-process timer is lost, but later lazy cleanup can still cancel expired reservations.
-
----
-
-## Future Improvements
-
-Short list of likely next evolutions:
-
-- add idempotency keys for reserve and confirm
-- add explicit refund / return states
-- add request IDs and structured failure codes to audit metadata
-- move expiry cleanup to a durable worker or scheduled job
-- add rate limiting on reserve endpoints
-- denormalize or isolate hot inventory paths further if contention grows
-- consider queue-based booking or sharded inventory for very hot events
-- add seat-level inventory only if the product needs explicit seat selection
-
----
-
-## How This Would Evolve Under High Scale
-
-### 1. Hot-event contention
-
-Today, one hot event means one hot `events` row.
-
-At larger scale:
-
-- split inventory into dedicated rows or shards
-- or move booking admission through a queue/worker model
-
-### 2. Durable expiry handling
-
-Today, expiry is partly in-process.
-
-At larger scale:
-
-- move to a background worker, cron-like scanner, or delayed job queue
-
-### 3. Stronger client semantics
-
-Today, retries are handled by conflict checks.
-
-At larger scale:
-
-- add idempotency keys so duplicate client calls are safe and predictable
-
-### 4. Better observability
-
-Today, audit logs are good for debugging.
-
-At larger scale:
-
-- add stable failure codes
-- add correlation IDs
-- add metrics and dashboards for reserve/confirm/cancel outcomes
-
-### 5. Optional seat-level design
-
-Today, the system sells quantities.
-
-If explicit seats are required later:
-
-- add seat inventory rows
-- add per-seat reservation states
-- move from event counters to seat allocation logic
-
 ---
 
 ## Summary
@@ -331,7 +253,5 @@ The current design is a solid intermediate system:
 - simple enough to run and review quickly
 - strong enough to avoid overselling
 - explicit enough to reason about reserve, confirm, cancel, and expiry
-
-Its main limitations are hot-row contention, in-process expiry timers, and the lack of idempotency and seat-level modeling.
 
 For code structure and ports, see [ARCHITECTURE.md](ARCHITECTURE.md). For the detailed runtime sequence, see [reservelogic.md](reservelogic.md).
